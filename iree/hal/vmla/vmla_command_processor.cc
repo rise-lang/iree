@@ -29,7 +29,7 @@ namespace vmla {
 
 VMLACommandProcessor::VMLACommandProcessor(
     Allocator* allocator, CommandCategoryBitfield command_categories)
-    : HostLocalCommandProcessor(allocator, command_categories) {
+    : SerialCommandProcessor(allocator, command_categories) {
   // TODO(#1172): embed the stack allocation within the command processor.
   iree_allocator_malloc(IREE_ALLOCATOR_SYSTEM, sizeof(iree_vm_stack_t),
                         (void**)&stack_);
