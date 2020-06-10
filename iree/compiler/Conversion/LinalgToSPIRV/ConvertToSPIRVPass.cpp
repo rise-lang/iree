@@ -374,7 +374,7 @@ void ConvertToSPIRVPass::runOnOperation() {
   }
 
   for (FuncOp fn : functions)
-    if (failed(applyFullConversion(fn, *target, patterns, &typeConverter)))
+    if (failed(applyFullConversion(fn, *target, patterns)))
       return signalPassFailure();
 
   // Collect all SPIR-V ops into a spv.module.

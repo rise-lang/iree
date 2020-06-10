@@ -49,8 +49,10 @@ HALConversionTarget::HALConversionTarget(MLIRContext *context,
   addLegalOp<IREE::HAL::ExecutableOp>();
   markOpRecursivelyLegal<IREE::HAL::ExecutableOp>();
 
-  addDynamicallyLegalOp<FuncOp>(
-      [&](FuncOp op) { return typeConverter.isSignatureLegal(op.getType()); });
+  addDynamicallyLegalOp<FuncOp>([&](FuncOp op) {
+    return typeConverter.isSignatureLegal(op.getType()) &&
+           typeConverter.isSignatureLegal(&op.getBody());
+  });
   addDynamicallyLegalOp<ConstantOp>(
       [&](ConstantOp op) { return typeConverter.isLegal(op.getType()); });
 }
