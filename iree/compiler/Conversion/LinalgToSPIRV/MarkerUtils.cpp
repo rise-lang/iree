@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "iree/compiler/Conversion/CodegenUtils/MarkerUtils.h"
+#include "iree/compiler/Conversion/LinalgToSPIRV/MarkerUtils.h"
 
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/IR/Attributes.h"
@@ -29,8 +29,6 @@ static bool checkMarkerValue(Operation *op, StringRef marker = "") {
   return attr && (marker == "" || attr.getValue() == marker);
 }
 
-StringRef getNoTileMarker() { return "no-tile"; }
-
 StringRef getWorkGroupMarker() { return "workgroup"; }
 
 StringRef getSPIRVMarker() { return "SPIRV"; }
@@ -39,10 +37,6 @@ StringRef getWorkItemMarker() { return "workitem"; }
 
 bool hasMarker(Operation *op, StringRef marker) {
   return checkMarkerValue(op, marker);
-}
-
-bool hasNoTileMarker(Operation *op) {
-  return checkMarkerValue(op, getNoTileMarker());
 }
 
 bool hasWorkGroupMarker(Operation *op) {
@@ -61,8 +55,6 @@ void setMarker(Operation *op, StringRef marker) {
   op->setAttr(linalg::LinalgTransforms::kLinalgTransformMarker,
               StringAttr::get(marker, op->getContext()));
 }
-
-void setNoTileMarker(Operation *op) { setMarker(op, getNoTileMarker()); }
 
 void setWorkGroupMarker(Operation *op) { setMarker(op, getWorkGroupMarker()); }
 

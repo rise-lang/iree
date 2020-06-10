@@ -23,11 +23,9 @@ cc_library(
     name = "CodegenUtils",
     srcs = [
         "FunctionUtils.cpp",
-        "MarkerUtils.cpp",
     ],
     hdrs = [
         "FunctionUtils.h",
-        "MarkerUtils.h",
     ],
     deps = [
         "@llvm-project//llvm:support",

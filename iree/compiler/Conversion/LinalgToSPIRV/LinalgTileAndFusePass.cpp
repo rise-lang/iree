@@ -17,7 +17,7 @@
 // Implements a pass to tile and fuse linalg operations on buffers.
 //
 //===----------------------------------------------------------------------===//
-#include "iree/compiler/Conversion/CodegenUtils/MarkerUtils.h"
+#include "iree/compiler/Conversion/LinalgToSPIRV/MarkerUtils.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/MemorySpace.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/Passes.h"
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
@@ -80,35 +80,14 @@ static LogicalResult updateWorkGroupSize(FuncOp funcOp,
   if (!llvm::hasSingleElement(body))
     return funcOp.emitError("unhandled dispatch function with multiple blocks");
 
+  if (workGroupSize.size() != 3)
+    return funcOp.emitError("expected workgroup size to have three entries");
   SmallVector<int32_t, 3> workGroupSizeVec = llvm::to_vector<3>(llvm::map_range(
       workGroupSize, [](int64_t v) { return static_cast<int32_t>(v); }));
 
-  // TODO(ravishankarm, antiagainst): We should have at most one scf.parallel
-  // op, but that is not the case till the splitting of kernels lands.
-  unsigned numParallelLoops = 0;
-  auto updateNumParallelLoops = [&numParallelLoops](unsigned nPar) {
-    numParallelLoops =
-        (!numParallelLoops ? nPar : std::min(numParallelLoops, nPar));
-  };
-  for (auto parallelLoop : body.front().getOps<scf::ParallelOp>()) {
-    updateNumParallelLoops(parallelLoop.getNumLoops());
-  }
-  // If there are no parallel loops, there might be linalg ops that arent
-  // tiled. Use that to get the number of parallel loops.
-  for (auto linalgOp : body.front().getOps<linalg::LinalgOp>()) {
-    updateNumParallelLoops(getNumOuterParallelLoops(linalgOp));
-  }
-  workGroupSizeVec.resize(numParallelLoops);
-  LLVM_DEBUG({
-    llvm::dbgs() << "--- IREE Linalg tile and fuse configuration ---\n";
-    llvm::dbgs() << "# workgroup sizes at end: [";
-    interleaveComma(workGroupSizeVec, llvm::dbgs());
-    llvm::dbgs() << "]\n";
-  });
-  MLIRContext *context = funcOp.getContext();
-  workGroupSizeVec.resize(3, 1);
-  funcOp.setAttr(spirv::getEntryPointABIAttrName(),
-                 spirv::getEntryPointABIAttr(workGroupSizeVec, context));
+  funcOp.setAttr(
+      spirv::getEntryPointABIAttrName(),
+      spirv::getEntryPointABIAttr(workGroupSizeVec, funcOp.getContext()));
   return success();
 }
 
@@ -119,7 +98,13 @@ namespace {
 class TileSizeCalculator {
  public:
   TileSizeCalculator(FuncOp funcOp)
-      : resourceLimits(spirv::lookupTargetEnv(funcOp).getResourceLimits()) {}
+      : resourceLimits(spirv::lookupTargetEnv(funcOp).getResourceLimits()) {
+    if (DenseIntElementsAttr attr = spirv::lookupLocalWorkGroupSize(funcOp)) {
+      for (auto val : attr.getValues<APInt>())
+        workgroupSize.push_back(val.getSExtValue());
+    }
+    workgroupSize.resize(3, 1);
+  }
 
   /// Compute the tile sizes based on workgroup size specified.
   LogicalResult setTileSizesBasedOnWorkgroupSize(
@@ -294,25 +279,6 @@ struct LinalgTileAndFusePass
   SmallVector<int64_t, 3> workGroupSize;
 };
 
-/// Pattern to tile linalg operations if they have the workgroup marker.
-template <typename LinalgOp>
-struct TileLinalgOpPattern : public linalg::LinalgTilingPattern<LinalgOp> {
-  using linalg::LinalgTilingPattern<LinalgOp>::LinalgTilingPattern;
-
-  LogicalResult matchAndRewrite(Operation *op,
-                                PatternRewriter &rewriter) const override {
-    if (!hasWorkGroupMarker(op)) return failure();
-    if (succeeded(linalg::LinalgTilingPattern<LinalgOp>::matchAndRewrite(
-            op, rewriter)))
-      return success();
-    // Update the marker to map to global invocation ID.
-    rewriter.startRootUpdate(op);
-    setNoTileMarker(op);
-    rewriter.finalizeRootUpdate(op);
-    return success();
-  }
-};
-
 /// Pattern to promote subviews to memory.
 // TODO(ravishankarm): Generalize this for other operations.
 struct PromoteSubviewsPattern
@@ -348,14 +314,7 @@ void LinalgTileAndFusePass::runOnFunction() {
   auto linalgOps = block.getOps<linalg::LinalgOp>();
   if (linalgOps.empty()) return;
 
-  // Go through all the Linalg ops and set the marker to trigger tiling./
-  // TODO(ravishankarm): Move this to HLOToLinalgOnBuffers so that it is added
-  // on op-creation.
-  for (auto op : linalgOps)
-    if (!hasMarker(op)) setWorkGroupMarker(op);
-
   TileSizeCalculator tileSizeCalculator(funcOp);
-
   if (workGroupSize.empty()) {
     // Get the tile sizes to use for the lowering.
     SmallVector<int64_t, 3> tileSizes;
@@ -376,20 +335,16 @@ void LinalgTileAndFusePass::runOnFunction() {
   });
 
   OwningRewritePatternList tilingPatterns;
-  tilingPatterns.insert<TileLinalgOpPattern<linalg::ConvOp>,
-                        TileLinalgOpPattern<linalg::CopyOp>,
-                        TileLinalgOpPattern<linalg::FillOp>,
-                        TileLinalgOpPattern<linalg::GenericOp>,
-                        TileLinalgOpPattern<linalg::IndexedGenericOp>,
-                        TileLinalgOpPattern<linalg::MatmulOp>,
-                        TileLinalgOpPattern<linalg::PoolingMaxOp>,
-                        TileLinalgOpPattern<linalg::PoolingMinOp>,
-                        TileLinalgOpPattern<linalg::PoolingSumOp>>(
+  tilingPatterns.insert<linalg::LinalgTilingPattern<linalg::ConvOp>,
+                        linalg::LinalgTilingPattern<linalg::MatmulOp>,
+                        linalg::LinalgTilingPattern<linalg::PoolingMaxOp>,
+                        linalg::LinalgTilingPattern<linalg::PoolingMinOp>,
+                        linalg::LinalgTilingPattern<linalg::PoolingSumOp>>(
       context,
       linalg::LinalgTilingOptions()
           .setTileSizes(tileSizeCalculator.getTileSizesForLinalg())
           .setLoopType(linalg::LinalgTilingLoopType::ParallelLoops),
-      linalg::LinalgMarker(Identifier::get(getWorkGroupMarker(), context),
+      linalg::LinalgMarker(ArrayRef<Identifier>(),
                            Identifier::get(getWorkItemMarker(), context)));
   applyPatternsAndFoldGreedily(getOperation(), tilingPatterns);
 

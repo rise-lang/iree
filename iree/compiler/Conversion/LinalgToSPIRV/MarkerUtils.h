@@ -19,8 +19,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef IREE_COMPILER_CONVERSION_CODEGENUTILS_MARKERUTILS_H_
-#define IREE_COMPILER_CONVERSION_CODEGENUTILS_MARKERUTILS_H_
+#ifndef IREE_COMPILER_CONVERSION_LINALGTOSPIRV_MARKERUTILS_H_
+#define IREE_COMPILER_CONVERSION_LINALGTOSPIRV_MARKERUTILS_H_
 
 #include "llvm/ADT/StringRef.h"
 #include "mlir/Support/LLVM.h"
@@ -76,4 +76,4 @@ void setWorkItemMarker(Operation *);
 }  // namespace iree_compiler
 }  // namespace mlir
 
-#endif  // IREE_COMPILER_CONVERSION_CODEGENUTILS_MARKERUTILS_H_
+#endif  // IREE_COMPILER_CONVERSION_LINALGTOSPIRV_MARKERUTILS_H_
