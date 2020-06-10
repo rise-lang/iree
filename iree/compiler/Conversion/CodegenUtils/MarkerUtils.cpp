@@ -21,6 +21,11 @@
 namespace mlir {
 namespace iree_compiler {
 
+struct VectorTransforms {
+  static const StringLiteral kVectorTransformMarker;
+};
+const StringLiteral VectorTransforms::kVectorTransformMarker =
+    "__internal_vector_transform__";
 /// Checks if the operation has the `marker` If `marker` is null string, checks
 /// if any marker is set.
 static bool checkMarkerValue(Operation *op, StringRef marker = "") {
@@ -33,9 +38,9 @@ StringRef getNoTileMarker() { return "no-tile"; }
 
 StringRef getWorkGroupMarker() { return "workgroup"; }
 
-StringRef getSPIRVMarker() { return "SPIRV"; }
-
 StringRef getWorkItemMarker() { return "workitem"; }
+
+StringRef getCooperativeMatrixMarker() { return "cooperative-matrix"; }
 
 bool hasMarker(Operation *op, StringRef marker) {
   return checkMarkerValue(op, marker);
@@ -53,13 +58,20 @@ bool hasWorkItemMarker(Operation *op) {
   return checkMarkerValue(op, getWorkItemMarker());
 }
 
-bool hasSPIRVMarker(Operation *op) {
-  return checkMarkerValue(op, getSPIRVMarker());
+bool hasCooperativeMatrixMarker(Operation *op) {
+  StringAttr attr =
+      op->getAttrOfType<StringAttr>(VectorTransforms::kVectorTransformMarker);
+  return attr && attr.getValue() == getCooperativeMatrixMarker();
 }
 
 void setMarker(Operation *op, StringRef marker) {
   op->setAttr(linalg::LinalgTransforms::kLinalgTransformMarker,
               StringAttr::get(marker, op->getContext()));
+}
+
+void setCooperativeMatrixMarker(Operation *op) {
+  op->setAttr(VectorTransforms::kVectorTransformMarker,
+              StringAttr::get(getCooperativeMatrixMarker(), op->getContext()));
 }
 
 void setNoTileMarker(Operation *op) { setMarker(op, getNoTileMarker()); }
