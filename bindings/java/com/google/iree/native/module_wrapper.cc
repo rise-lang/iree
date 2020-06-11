@@ -12,29 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "bindings/java/com/google/iree/native/instance_wrapper.h"
+#include "bindings/java/com/google/iree/native/module_wrapper.h"
 
 #include "iree/base/api_util.h"
-#include "iree/modules/hal/hal_module.h"
-#include "iree/modules/strings/strings_module.h"
-#include "iree/modules/tensorlist/native_module.h"
 
 namespace iree {
 namespace java {
 
-Status InstanceWrapper::Create() {
-  SetupVm();
+Status ModuleWrapper::Create(void* flatbufferData, int length) {
   return FromApiStatus(
-      iree_vm_instance_create(IREE_ALLOCATOR_SYSTEM, &instance_), IREE_LOC);
-}
-
-iree_vm_instance_t* InstanceWrapper::instance() const { return instance_; }
-
-void InstanceWrapper::SetupVm() {
-  CHECK_EQ(IREE_STATUS_OK, iree_vm_register_builtin_types());
-  CHECK_EQ(IREE_STATUS_OK, iree_hal_module_register_types());
-  CHECK_EQ(IREE_STATUS_OK, iree_tensorlist_module_register_types());
-  CHECK_EQ(IREE_STATUS_OK, iree_strings_module_register_types());
+      iree_vm_bytecode_module_create(
+          iree_const_byte_span_t{
+              reinterpret_cast<const uint8_t*>(flatbufferData),
+              static_cast<iree_host_size_t>(length)},
+          IREE_ALLOCATOR_NULL, IREE_ALLOCATOR_SYSTEM, &module_),
+      IREE_LOC);
 }
 
 }  // namespace java
