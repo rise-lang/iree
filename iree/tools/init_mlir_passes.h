@@ -31,6 +31,7 @@
 #include "mlir/Dialect/GPU/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Dialect/Quant/Passes.h"
+#include "mlir/Dialect/Rise/Passes.h"
 #include "mlir/Dialect/SCF/Passes.h"
 #include "mlir/Dialect/SPIRV/Passes.h"
 #include "mlir/Transforms/LocationSnapshot.h"
@@ -146,6 +147,11 @@ inline void registerMlirPasses() {
   // Quant
   quant::createConvertSimulatedQuantPass();
   quant::createConvertConstPass();
+
+  // Rise
+  ::mlir::registerPass(
+      "rise-to-imperative", "lower rise code to imperative code",
+      []() -> std::unique_ptr<Pass> { return rise::createConvertRiseToImperativePass(); });
 
   // SPIR-V
   spirv::createLowerABIAttributesPass();

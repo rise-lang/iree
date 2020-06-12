@@ -25,6 +25,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
 #include "mlir/Dialect/Quant/QuantOps.h"
+#include "mlir/Dialect/Rise/IR/Dialect.h"
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/SDBM/SDBMDialect.h"
 #include "mlir/Dialect/SPIRV/SPIRVDialect.h"
@@ -43,6 +44,7 @@ inline void registerMlirDialects() {
     registerDialect<gpu::GPUDialect>();
     registerDialect<LLVM::LLVMDialect>();
     registerDialect<linalg::LinalgDialect>();
+    registerDialect<rise::RiseDialect>();
     registerDialect<scf::SCFDialect>();
     registerDialect<quant::QuantizationDialect>();
     registerDialect<shape::ShapeDialect>();

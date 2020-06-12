@@ -21,6 +21,7 @@
 //===----------------------------------------------------------------------===//
 
 #include <cstddef>
+#include <iostream>
 
 #include "iree/compiler/Conversion/CodegenUtils/MarkerUtils.h"
 #include "iree/compiler/Conversion/HLOToLinalg/Passes.h"
@@ -33,12 +34,15 @@
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
 #include "mlir/Dialect/Linalg/IR/LinalgTypes.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
+#include "mlir/Dialect/Rise/EDSC/Builders.h"
+#include "mlir/Dialect/Rise/IR/Dialect.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Function.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/StandardTypes.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
@@ -277,8 +281,273 @@ struct DotOpConversion
         rewriter.notifyMatchFailure(op, "failed to zero fill result buffer");
         return failure();
       }
-      rewriter.create<LinalgOpTy>(op.getLoc(), inputBuffers[0], inputBuffers[1],
-                                  resultBuffers[0]);
+
+      ArrayRef<int64_t> lhsShape =
+          op.lhs().getType().cast<ShapedType>().getShape();
+      ArrayRef<int64_t> rhsShape =
+          op.rhs().getType().cast<ShapedType>().getShape();
+      auto shapeMatches = [](int64_t a, int64_t b) {
+        return a == ShapedType::kDynamicSize || b == ShapedType::kDynamicSize ||
+               a == b;
+      };
+      if (opType != DotOperationType::MatrixMatrix) {
+        rewriter.create<LinalgOpTy>(op.getLoc(), inputBuffers[0],
+                                    inputBuffers[1], resultBuffers[0]);
+      } else {
+        std::cout << "\nrise dot translation! for mm of A[" << lhsShape[0]
+                  << "," << lhsShape[1] << "], B[" << rhsShape[0] << ","
+                  << rhsShape[1] << "]\n\n"
+                  << std::flush;
+
+        OpBuilder builder(op);
+        mlir::edsc::ScopedContext scope(builder, op.getLoc());
+
+        rise::ArrayType AType = rise::ArrayType::get(
+            rewriter.getContext(),
+            rise::Nat::get(rewriter.getContext(), lhsShape[0]),
+            rise::ArrayType::get(
+                rewriter.getContext(),
+                rise::Nat::get(rewriter.getContext(), lhsShape[1]),
+                rise::ScalarType::get(
+                    rewriter.getContext(),
+                    FloatType::getF32(rewriter.getContext()))));
+        rise::ArrayType arowType =
+            AType.getElementType().dyn_cast<rise::ArrayType>();
+
+        rise::ArrayType BType = rise::ArrayType::get(
+            rewriter.getContext(),
+            rise::Nat::get(rewriter.getContext(), rhsShape[0]),
+            rise::ArrayType::get(
+                rewriter.getContext(),
+                rise::Nat::get(rewriter.getContext(), rhsShape[1]),
+                rise::ScalarType::get(
+                    rewriter.getContext(),
+                    FloatType::getF32(rewriter.getContext()))));
+
+        rise::ArrayType BType_trans = rise::ArrayType::get(
+            rewriter.getContext(),
+            rise::Nat::get(rewriter.getContext(), rhsShape[1]),
+            rise::ArrayType::get(
+                rewriter.getContext(),
+                rise::Nat::get(rewriter.getContext(), rhsShape[0]),
+                rise::ScalarType::get(
+                    rewriter.getContext(),
+                    FloatType::getF32(rewriter.getContext()))));
+        rise::ArrayType bcolType =
+            BType_trans.getElementType().dyn_cast<rise::ArrayType>();
+        rise::ScalarType elementType =
+            arowType.getElementType().dyn_cast<rise::ScalarType>();
+
+        arowType.dump();
+        bcolType.dump();
+
+        rise::InOp A =
+            rewriter.create<rise::InOp>(op.getLoc(), AType, inputBuffers[0]);
+
+        rise::InOp B =
+            rewriter.create<rise::InOp>(op.getLoc(), BType, inputBuffers[1]);
+        rise::TransposeOp transposeOp = rewriter.create<rise::TransposeOp>(
+            op.getLoc(),
+            rise::FunType::get(rewriter.getContext(), BType, BType_trans),
+            rise::NatAttr::get(rewriter.getContext(), BType.getSize()),
+            rise::NatAttr::get(rewriter.getContext(), BType_trans.getSize()),
+            rise::DataTypeAttr::get(rewriter.getContext(), elementType));
+        rise::ApplyOp B_trans = rewriter.create<rise::ApplyOp>(
+            op.getLoc(), BType_trans, transposeOp, ValueRange{B});
+
+        rise::LambdaOp outerLambda = rewriter.create<rise::LambdaOp>(
+            op.getLoc(),
+            rise::FunType::get(rewriter.getContext(), arowType, arowType));
+        Block *outerLambdaBlock = new Block();
+        auto arow = outerLambdaBlock->addArgument(arowType);
+        outerLambda.region().push_front(outerLambdaBlock);
+        rewriter.setInsertionPointToStart(&outerLambda.region().front());
+
+        rise::LambdaOp innerLambda = rewriter.create<rise::LambdaOp>(
+            op.getLoc(),
+            rise::FunType::get(rewriter.getContext(), bcolType, bcolType));
+        Block *innerLambdaBlock = new Block();
+        auto bcol = innerLambdaBlock->addArgument(bcolType);
+        innerLambda.region().push_front(innerLambdaBlock);
+        rewriter.setInsertionPointToStart(&innerLambda.region().front());
+
+        // zipping
+        rise::FunType zipType = rise::FunType::get(
+            rewriter.getContext(), arowType,
+            rise::FunType::get(
+                rewriter.getContext(), bcolType,
+                rise::ArrayType::get(
+                    rewriter.getContext(), arowType.getSize(),
+                    rise::Tuple::get(rewriter.getContext(), elementType,
+                                     elementType))));
+
+        rise::ZipOp zip = rewriter.create<rise::ZipOp>(
+            op.getLoc(), zipType,
+            rise::NatAttr::get(rewriter.getContext(), arowType.getSize()),
+            rise::DataTypeAttr::get(rewriter.getContext(), elementType),
+            rise::DataTypeAttr::get(rewriter.getContext(), elementType));
+
+        rise::ApplyOp zippedArrays = rewriter.create<rise::ApplyOp>(
+            op.getLoc(),
+            rise::ArrayType::get(rewriter.getContext(), arowType.getSize(),
+                                 rise::Tuple::get(rewriter.getContext(),
+                                                  elementType, elementType)),
+            zip, ValueRange{arow, bcol});
+        std::cout << "debug!\n" << std::flush;
+
+        // Reduction
+        rise::Tuple tupleType =
+            rise::Tuple::get(rewriter.getContext(), elementType, elementType);
+
+        rise::LambdaOp reductionLambda = rewriter.create<rise::LambdaOp>(
+            op.getLoc(),
+            rise::FunType::get(rewriter.getContext(), tupleType,
+                               rise::FunType::get(rewriter.getContext(),
+                                                  elementType, elementType)));
+        Block *reductionLambdaBlock = new Block();
+        auto tuple = reductionLambdaBlock->addArgument(tupleType);
+        auto acc = reductionLambdaBlock->addArgument(elementType);
+        reductionLambda.region().push_front(reductionLambdaBlock);
+        rewriter.setInsertionPointToStart(&reductionLambda.region().front());
+
+        rise::FstOp fst = rewriter.create<rise::FstOp>(
+            op.getLoc(),
+            rise::FunType::get(rewriter.getContext(), tupleType, elementType),
+            rise::DataTypeAttr::get(rewriter.getContext(), elementType),
+            rise::DataTypeAttr::get(rewriter.getContext(), elementType));
+        rise::SndOp snd = rewriter.create<rise::SndOp>(
+            op.getLoc(),
+            rise::FunType::get(rewriter.getContext(), tupleType, elementType),
+            rise::DataTypeAttr::get(rewriter.getContext(), elementType),
+            rise::DataTypeAttr::get(rewriter.getContext(), elementType));
+        std::cout << "debug!\n" << std::flush;
+
+        rise::ApplyOp fstApplied = rewriter.create<rise::ApplyOp>(
+            op.getLoc(), elementType, fst, ValueRange{tuple});
+        rise::ApplyOp sndApplied = rewriter.create<rise::ApplyOp>(
+            op.getLoc(), elementType, snd, ValueRange{tuple});
+        std::cout << "embed!\n" << std::flush;
+
+        rise::EmbedOp embedOp = rewriter.create<rise::EmbedOp>(
+            op.getLoc(), acc.getType(),
+            ValueRange{fstApplied, sndApplied, acc});
+        std::cout << "debug!\n" << std::flush;
+
+        Block *embedBlock = new Block();
+        std::cout << "debug!\n" << std::flush;
+
+        embedBlock->addArgument(elementType.getWrappedType());
+        embedBlock->addArgument(elementType.getWrappedType());
+        embedBlock->addArgument(
+            acc.getType().dyn_cast<rise::ScalarType>().getWrappedType());
+        std::cout << "debug!\n" << std::flush;
+
+        embedOp.region().push_front(embedBlock);
+        rewriter.setInsertionPointToStart(&embedOp.region().front());
+
+        std::cout << "debug!\n" << std::flush;
+
+        auto product = rewriter.create<MulFOp>(
+            op.getLoc(), elementType.getWrappedType(),
+            embedBlock->getArgument(0), embedBlock->getArgument(1));
+        auto result = rewriter.create<AddFOp>(
+            op.getLoc(), elementType.getWrappedType(), product.getResult(),
+            embedBlock->getArgument(2));
+
+        rewriter.create<rise::ReturnOp>(op.getLoc(), result.getResult());
+        rewriter.setInsertionPointAfter(embedOp);
+
+        rewriter.create<rise::ReturnOp>(op.getLoc(), embedOp.getResult());
+        rewriter.setInsertionPointAfter(reductionLambda);
+        // end of reduction
+
+        rise::LiteralOp init = rewriter.create<rise::LiteralOp>(
+            op.getLoc(), elementType,
+            rise::LiteralAttr::get(rewriter.getContext(), elementType,
+                                   "0.000000"));
+
+        rise::FunType reduceType = rise::FunType::get(
+            rewriter.getContext(),
+            rise::FunType::get(rewriter.getContext(), tuple.getType(),
+                               rise::FunType::get(rewriter.getContext(),
+                                                  init.getResult().getType(),
+                                                  init.getResult().getType())),
+            rise::FunType::get(
+                rewriter.getContext(), elementType,
+                rise::FunType::get(rewriter.getContext(),
+                                   zippedArrays.getResult().getType(),
+                                   init.getResult().getType())));
+        rise::ReduceSeqOp reduce = rewriter.create<rise::ReduceSeqOp>(
+            op.getLoc(), reduceType, zip.nAttr(),
+            rise::DataTypeAttr::get(
+                rewriter.getContext(),
+                rise::Tuple::get(rewriter.getContext(), zip.s(), zip.t())),
+            zip.tAttr(), StringAttr::get("loop", rewriter.getContext()));
+        rise::ApplyOp reduced = rewriter.create<rise::ApplyOp>(
+            op.getLoc(), init.getResult().getType(), reduce.getResult(),
+            ValueRange{reductionLambda.getResult(), init.getResult(),
+                       zippedArrays.getResult()});
+
+        rewriter.create<rise::ReturnOp>(op.getLoc(), reduced.getResult());
+        rewriter.setInsertionPointAfter(innerLambda);
+
+        // MapB
+        rise::FunType mapBType = rise::FunType::get(
+            rewriter.getContext(),
+            rise::FunType::get(rewriter.getContext(), bcolType, bcolType),
+            rise::FunType::get(
+                rewriter.getContext(),
+                rise::ArrayType::get(rewriter.getContext(),
+                                     BType_trans.getSize(), arowType),
+                rise::ArrayType::get(rewriter.getContext(),
+                                     BType_trans.getSize(), arowType)));
+
+        rise::MapSeqOp mapB = rewriter.create<rise::MapSeqOp>(
+            op.getLoc(), mapBType,
+            rise::NatAttr::get(rewriter.getContext(), BType_trans.getSize()),
+            rise::DataTypeAttr::get(rewriter.getContext(), arowType),
+            rise::DataTypeAttr::get(rewriter.getContext(), arowType),
+            StringAttr::get("loop", rewriter.getContext()));
+//        Value mapB = mlir::edsc::op::mapSeq("loop", BType_trans.getSize(), arowType,
+//                                               arowType);
+
+        rise::ApplyOp mapBApplied = rewriter.create<rise::ApplyOp>(
+            op.getLoc(),
+            rise::ArrayType::get(rewriter.getContext(), bcolType.getSize(),
+                                 arowType),
+            mapB,
+            ValueRange{innerLambda.getResult(), B_trans.getResult()});
+
+        rewriter.create<rise::ReturnOp>(op.getLoc(), mapBApplied.getResult());
+        rewriter.setInsertionPointAfter(outerLambda);
+
+        rise::FunType mapAType = rise::FunType::get(
+            rewriter.getContext(),
+            rise::FunType::get(rewriter.getContext(), bcolType, bcolType),
+            rise::FunType::get(
+                rewriter.getContext(),
+                rise::ArrayType::get(rewriter.getContext(), AType.getSize(),
+                                     arowType),
+                rise::ArrayType::get(rewriter.getContext(), AType.getSize(),
+                                     arowType)));
+        rise::MapSeqOp mapA = rewriter.create<rise::MapSeqOp>(
+            op.getLoc(), mapAType,
+            rise::NatAttr::get(rewriter.getContext(), AType.getSize()),
+            rise::DataTypeAttr::get(rewriter.getContext(), arowType),
+            rise::DataTypeAttr::get(rewriter.getContext(), arowType),
+            StringAttr::get("loop", rewriter.getContext()));
+        rise::ApplyOp mapAApplied = rewriter.create<rise::ApplyOp>(
+            op.getLoc(),
+            rise::ArrayType::get(rewriter.getContext(), arowType.getSize(),
+                                 arowType),
+            mapA.getResult(),
+            ValueRange{outerLambda.getResult(), A.getResult()});
+
+        rewriter.create<rise::OutOp>(op.getLoc(), resultBuffers[0],
+                                     mapAApplied.getResult());
+
+        mapAApplied.getParentOfType<FuncOp>().dump();
+      }
       return success();
     }
     return failure();
