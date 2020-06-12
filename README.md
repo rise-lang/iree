@@ -1,3 +1,11 @@
+# Rise integration demonstration
+In this repository we demonstrate the integration of the Rise dialect in an end-to-end compilation flow. 
+
+Have a look at the HLOToLinalgOnBuffers pass.
+
+
+
+ReadMe from google/iree
 # IREE: Intermediate Representation Execution Environment
 
 IREE (**I**ntermediate **R**epresentation **E**xecution **E**nvironment,
