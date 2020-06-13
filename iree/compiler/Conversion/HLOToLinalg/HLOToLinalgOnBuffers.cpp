@@ -36,8 +36,8 @@
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Rise/EDSC/Builders.h"
 #include "mlir/Dialect/Rise/IR/Dialect.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/StandardOps/EDSC/Intrinsics.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
@@ -342,103 +342,100 @@ struct DotOpConversion
         rise::ScalarType elementType =
             arowType.getElementType().dyn_cast<rise::ScalarType>();
 
-
+        // These have to be always on top!
         Value A = in(inputBuffers[0], AType);
         Value B = in(inputBuffers[1], BType);
-        Value B_trans =
-            transpose(BType.getSize(), BType_trans.getSize(), elementType, B);
 
-        rise::LambdaOp outerLambda = rewriter.create<rise::LambdaOp>(
-            op.getLoc(),
-            rise::FunType::get(rewriter.getContext(), arowType, arowType));
-        Block *outerLambdaBlock = new Block();
-        auto arow = outerLambdaBlock->addArgument(arowType);
-        outerLambda.region().push_front(outerLambdaBlock);
-        rewriter.setInsertionPointToStart(&outerLambda.region().front());
-        mlir::edsc::ScopedContext scopeOuterLambda(
-            rewriter, rewriter.saveInsertionPoint(), op.getLoc());
+        // long version
 
-        rise::LambdaOp innerLambda = rewriter.create<rise::LambdaOp>(
-            op.getLoc(),
-            rise::FunType::get(rewriter.getContext(), bcolType, bcolType));
-        Block *innerLambdaBlock = new Block();
-        auto bcol = innerLambdaBlock->addArgument(bcolType);
-        innerLambda.region().push_front(innerLambdaBlock);
-        rewriter.setInsertionPointToStart(&innerLambda.region().front());
-        mlir::edsc::ScopedContext scopeInnerLambda(
-            rewriter, rewriter.saveInsertionPoint(), op.getLoc());
+        //        Value B_trans =
+        //            transpose(BType.getSize(), BType_trans.getSize(),
+        //            elementType, B);
+        //
+        //        Value outerLambda = lambda(
+        //            rise::FunType::get(rewriter.getContext(), arowType,
+        //            arowType), [&](MutableArrayRef<BlockArgument> args) {
+        //              auto arow = args[0];
+        //              Value innerLambda = lambda(
+        //                  rise::FunType::get(rewriter.getContext(), bcolType,
+        //                  bcolType), [&](MutableArrayRef<BlockArgument> args)
+        //                  {
+        //                    auto bcol = args[0];
+        //                    Value zippedArrays =
+        //                        zip(arowType.getSize(), elementType,
+        //                        elementType, arow, bcol);
+        //                   Value reductionLambda = lambda(
+        //                        rise::FunType::get(rewriter.getContext(),
+        //                        Tuple::get(rewriter.getContext(), elementType,
+        //                        elementType),
+        //                                           rise::FunType::get(rewriter.getContext(),
+        //                                                              elementType,
+        //                                                              elementType)),
+        //                                                              [&](MutableArrayRef<BlockArgument>
+        //                                                              args){
+        //                          auto tuple = args[0];
+        //                          auto acc = args[1];
+        //                          Value tuple_fst = fst(elementType,
+        //                          elementType, tuple); Value tuple_snd =
+        //                          snd(elementType, elementType, tuple); Value
+        //                          embedResult = embed(elementType,
+        //                          ValueRange{tuple_fst, tuple_snd, acc},
+        //                          [&](MutableArrayRef<BlockArgument> args){
+        //                            Value product = args[0] * args[1];
+        //                            Value result = product + args[2];
+        //                            rise_return(result);
+        //                          });
+        //                          rise_return(embedResult);
+        //                        });
+        //                    Value reduced = reduceSeq("loop",
+        //                    arowType.getSize(), elementType,
+        //                                              elementType,
+        //                                              reductionLambda,
+        //                                              literal(elementType,
+        //                                              "0.000000"),
+        //                                              zippedArrays);
+        //                    rise_return(reduced);
+        //                  });
+        //              Value mapBApplied = mapSeq("loop",
+        //              BType_trans.getSize(), arowType,
+        //                                         arowType, innerLambda,
+        //                                         B_trans);
+        //              rise_return(mapBApplied);
+        //            });
+        //        Value mapAApplied = mapSeq("loop", AType.getSize(), arowType,
+        //        arowType,
+        //                                   outerLambda, A);
+        //        out(resultBuffers[0], mapAApplied);
 
-        // zipping
-        Value zippedArrays =
-            zip(arowType.getSize(), elementType, elementType, arow, bcol);
+        // clang-format off
 
-        // Reduction
-        rise::Tuple tupleType =
-            rise::Tuple::get(rewriter.getContext(), elementType, elementType);
+        // shortened version
+//        out(resultBuffers[0], mapSeq("loop", AType.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), arowType, arowType), [&](MutableArrayRef<BlockArgument> args) {
+//                                           auto arow = args[0];
+//                                           rise_return(mapSeq("loop", BType_trans.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), bcolType, bcolType), [&](MutableArrayRef<BlockArgument> args) {
+//                                                 auto bcol = args[0];
+//                                                 rise_return(reduceSeq("loop", arowType.getSize(), elementType, elementType, lambda(rise::FunType::get(rewriter.getContext(), Tuple::get(rewriter.getContext(), elementType, elementType),rise::FunType::get(rewriter.getContext(),elementType, elementType)), [&](MutableArrayRef<BlockArgument> args){
+//                                                   auto tuple = args[0];
+//                                                   auto acc = args[1];
+//                                                   rise_return(embed(elementType, ValueRange{fst(elementType, elementType, tuple), snd(elementType, elementType, tuple), acc}, [&](MutableArrayRef<BlockArgument> args){
+//                                                     rise_return(args[0] * args[1] + args[2]);
+//                                                   }));
+//                                                 }),literal(elementType, "0.000000"), zip(arowType.getSize(), elementType, elementType, arow, bcol)));
+//                                               }), transpose(BType.getSize(), BType_trans.getSize(), elementType, B)));
+//                                         }), A));
 
-        rise::LambdaOp reductionLambda = rewriter.create<rise::LambdaOp>(
-            op.getLoc(),
-            rise::FunType::get(rewriter.getContext(), tupleType,
-                               rise::FunType::get(rewriter.getContext(),
-                                                  elementType, elementType)));
-        Block *reductionLambdaBlock = new Block();
-        auto tuple = reductionLambdaBlock->addArgument(tupleType);
-        auto acc = reductionLambdaBlock->addArgument(elementType);
-        reductionLambda.region().push_front(reductionLambdaBlock);
-        rewriter.setInsertionPointToStart(&reductionLambda.region().front());
+      // extremely short version without naming blockArgs in between.
+        out(resultBuffers[0], mapSeq("loop", AType.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), arowType, arowType), [&](MutableArrayRef<BlockArgument> args) {
+          rise_return(mapSeq("loop", BType_trans.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), bcolType, bcolType), [&](MutableArrayRef<BlockArgument> args) {
+            rise_return(reduceSeq("loop", arowType.getSize(), elementType, elementType, lambda(rise::FunType::get(rewriter.getContext(), Tuple::get(rewriter.getContext(), elementType, elementType),rise::FunType::get(rewriter.getContext(), elementType, elementType)), [&](MutableArrayRef<BlockArgument> args){
+              rise_return(embed(elementType, ValueRange{fst(elementType, elementType, args[0]), snd(elementType, elementType, args[0]), args[1]}, [&](MutableArrayRef<BlockArgument> args){
+                rise_return(args[0] * args[1] + args[2]);
+              }));
+            }),literal(elementType, "0.000000"), zip(arowType.getSize(), elementType, elementType, args[0], args[0])));
+          }), transpose(BType.getSize(), BType_trans.getSize(), elementType, B)));
+        }), A));
 
-        Value tuple_fst = fst(elementType, elementType, tuple);
-        Value tuple_snd = snd(elementType, elementType, tuple);
-
-        rise::EmbedOp embedOp = rewriter.create<rise::EmbedOp>(
-            op.getLoc(), acc.getType(), ValueRange{tuple_fst, tuple_snd, acc});
-        Block *embedBlock = new Block();
-        embedBlock->addArgument(elementType.getWrappedType());
-        embedBlock->addArgument(elementType.getWrappedType());
-        embedBlock->addArgument(
-            acc.getType().dyn_cast<rise::ScalarType>().getWrappedType());
-
-        embedOp.region().push_front(embedBlock);
-        rewriter.setInsertionPointToStart(&embedOp.region().front());
-
-
-        Value product = embedBlock->getArgument(0) * embedBlock->getArgument(1);
-        Value result = product * embedBlock->getArgument(2);
-
-        rewriter.create<rise::ReturnOp>(op.getLoc(), result);
-        rewriter.setInsertionPointAfter(embedOp);
-
-        rewriter.create<rise::ReturnOp>(op.getLoc(), embedOp.getResult());
-        rewriter.setInsertionPointAfter(reductionLambda);
-        // end of reduction
-
-        mlir::edsc::ScopedContext scopeAfterReductionLambda(
-            rewriter, rewriter.saveInsertionPoint(), op.getLoc());
-
-        Value reduced = reduceSeq("loop", arowType.getSize(), elementType,
-                                  elementType, reductionLambda.getResult(),
-                                  literal(elementType, "0.000000"), zippedArrays);
-
-        rewriter.create<rise::ReturnOp>(op.getLoc(), reduced);
-        rewriter.setInsertionPointAfter(innerLambda);
-        mlir::edsc::ScopedContext scopeAfterInnerLambda(
-            rewriter, rewriter.saveInsertionPoint(), op.getLoc());
-
-        Value mapBApplied = mapSeq("loop", BType_trans.getSize(), arowType,
-                                   arowType, innerLambda.getResult(), B_trans);
-
-        rewriter.create<rise::ReturnOp>(op.getLoc(), mapBApplied);
-        rewriter.setInsertionPointAfter(outerLambda);
-        mlir::edsc::ScopedContext scopeAfterOuterLambda(
-            rewriter, rewriter.saveInsertionPoint(), op.getLoc());
-
-        Value mapAApplied = mapSeq("loop", AType.getSize(), arowType, arowType,
-                                   outerLambda.getResult(), A);
-
-        rewriter.create<rise::OutOp>(op.getLoc(), resultBuffers[0],
-                                     mapAApplied);
-
-//        mapAApplied.getParentOfType<FuncOp>().dump();
+        // clang-format on
       }
       return success();
     }
