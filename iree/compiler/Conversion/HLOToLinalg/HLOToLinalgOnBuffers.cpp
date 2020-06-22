@@ -425,16 +425,17 @@ struct DotOpConversion
 //                                         }), A));
 
       // extremely short version without naming blockArgs in between.
-        out(resultBuffers[0], mapSeq("loop", AType.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), arowType, arowType), [&](MutableArrayRef<BlockArgument> args) {
-          rise_return(mapSeq("loop", BType_trans.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), bcolType, bcolType), [&](MutableArrayRef<BlockArgument> args) {
-            rise_return(reduceSeq("loop", arowType.getSize(), elementType, elementType, lambda(rise::FunType::get(rewriter.getContext(), Tuple::get(rewriter.getContext(), elementType, elementType),rise::FunType::get(rewriter.getContext(), elementType, elementType)), [&](MutableArrayRef<BlockArgument> args){
-              rise_return(embed(elementType, ValueRange{fst(elementType, elementType, args[0]), snd(elementType, elementType, args[0]), args[1]}, [&](MutableArrayRef<BlockArgument> args){
-                rise_return(args[0] * args[1] + args[2]);
+        out(resultBuffers[0], mapSeq("loop", AType.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), arowType, arowType), [&](auto args) {
+          return (mapSeq("loop", BType_trans.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), bcolType, bcolType), [&](auto args) {
+            return (reduceSeq("loop", arowType.getSize(), elementType, elementType, lambda(rise::FunType::get(rewriter.getContext(), Tuple::get(rewriter.getContext(), elementType, elementType),rise::FunType::get(rewriter.getContext(), elementType, elementType)), [&](auto args){
+              return (embed(elementType, ValueRange{fst(elementType, elementType, args[0]), snd(elementType, elementType, args[0]), args[1]}, [&](auto args){
+                return(args[0] * args[1] + args[2]);
               }));
             }),literal(elementType, "0.000000"), zip(arowType.getSize(), elementType, elementType, args[0], args[0])));
           }), transpose(BType.getSize(), BType_trans.getSize(), elementType, B)));
         }), A));
 
+        A.getParentBlock()->dump();
         // clang-format on
       }
       return success();
