@@ -298,6 +298,7 @@ struct DotOpConversion
         using namespace mlir;
         using namespace mlir::edsc;
         using namespace mlir::edsc::op;
+        using namespace mlir::edsc::type;
 
         std::cout << "\nrise dot translation! for mm of A[" << lhsShape[0]
                   << "," << lhsShape[1] << "], B[" << rhsShape[0] << ","
@@ -306,37 +307,19 @@ struct DotOpConversion
 
         OpBuilder builder(op);
         mlir::edsc::ScopedContext scope(builder, op.getLoc());
-        rise::ArrayType AType = rise::ArrayType::get(
-            rewriter.getContext(),
-            rise::Nat::get(rewriter.getContext(), lhsShape[0]),
-            rise::ArrayType::get(
-                rewriter.getContext(),
-                rise::Nat::get(rewriter.getContext(), lhsShape[1]),
-                rise::ScalarType::get(
-                    rewriter.getContext(),
-                    FloatType::getF32(rewriter.getContext()))));
+
+        ArrayType AType =
+            array2D(lhsShape[0], lhsShape[1],
+                    scalar(FloatType::getF32(scope.getContext())));
         rise::ArrayType arowType =
             AType.getElementType().dyn_cast<rise::ArrayType>();
 
-        rise::ArrayType BType = rise::ArrayType::get(
-            rewriter.getContext(),
-            rise::Nat::get(rewriter.getContext(), rhsShape[0]),
-            rise::ArrayType::get(
-                rewriter.getContext(),
-                rise::Nat::get(rewriter.getContext(), rhsShape[1]),
-                rise::ScalarType::get(
-                    rewriter.getContext(),
-                    FloatType::getF32(rewriter.getContext()))));
-
-        rise::ArrayType BType_trans = rise::ArrayType::get(
-            rewriter.getContext(),
-            rise::Nat::get(rewriter.getContext(), rhsShape[1]),
-            rise::ArrayType::get(
-                rewriter.getContext(),
-                rise::Nat::get(rewriter.getContext(), rhsShape[0]),
-                rise::ScalarType::get(
-                    rewriter.getContext(),
-                    FloatType::getF32(rewriter.getContext()))));
+        rise::ArrayType BType =
+            array2D(rhsShape[0], rhsShape[1],
+                    scalar(FloatType::getF32(scope.getContext())));
+        rise::ArrayType BType_trans =
+            array2D(rhsShape[1], rhsShape[0],
+                    scalar(FloatType::getF32(scope.getContext())));
         rise::ArrayType bcolType =
             BType_trans.getElementType().dyn_cast<rise::ArrayType>();
         rise::ScalarType elementType =
@@ -346,70 +329,7 @@ struct DotOpConversion
         Value A = in(inputBuffers[0], AType);
         Value B = in(inputBuffers[1], BType);
 
-        // long version
-
-        //        Value B_trans =
-        //            transpose(BType.getSize(), BType_trans.getSize(),
-        //            elementType, B);
-        //
-        //        Value outerLambda = lambda(
-        //            rise::FunType::get(rewriter.getContext(), arowType,
-        //            arowType), [&](MutableArrayRef<BlockArgument> args) {
-        //              auto arow = args[0];
-        //              Value innerLambda = lambda(
-        //                  rise::FunType::get(rewriter.getContext(), bcolType,
-        //                  bcolType), [&](MutableArrayRef<BlockArgument> args)
-        //                  {
-        //                    auto bcol = args[0];
-        //                    Value zippedArrays =
-        //                        zip(arowType.getSize(), elementType,
-        //                        elementType, arow, bcol);
-        //                   Value reductionLambda = lambda(
-        //                        rise::FunType::get(rewriter.getContext(),
-        //                        Tuple::get(rewriter.getContext(), elementType,
-        //                        elementType),
-        //                                           rise::FunType::get(rewriter.getContext(),
-        //                                                              elementType,
-        //                                                              elementType)),
-        //                                                              [&](MutableArrayRef<BlockArgument>
-        //                                                              args){
-        //                          auto tuple = args[0];
-        //                          auto acc = args[1];
-        //                          Value tuple_fst = fst(elementType,
-        //                          elementType, tuple); Value tuple_snd =
-        //                          snd(elementType, elementType, tuple); Value
-        //                          embedResult = embed(elementType,
-        //                          ValueRange{tuple_fst, tuple_snd, acc},
-        //                          [&](MutableArrayRef<BlockArgument> args){
-        //                            Value product = args[0] * args[1];
-        //                            Value result = product + args[2];
-        //                            rise_return(result);
-        //                          });
-        //                          rise_return(embedResult);
-        //                        });
-        //                    Value reduced = reduceSeq("loop",
-        //                    arowType.getSize(), elementType,
-        //                                              elementType,
-        //                                              reductionLambda,
-        //                                              literal(elementType,
-        //                                              "0.000000"),
-        //                                              zippedArrays);
-        //                    rise_return(reduced);
-        //                  });
-        //              Value mapBApplied = mapSeq("loop",
-        //              BType_trans.getSize(), arowType,
-        //                                         arowType, innerLambda,
-        //                                         B_trans);
-        //              rise_return(mapBApplied);
-        //            });
-        //        Value mapAApplied = mapSeq("loop", AType.getSize(), arowType,
-        //        arowType,
-        //                                   outerLambda, A);
-        //        out(resultBuffers[0], mapAApplied);
-
-        // clang-format off
-
-        // shortened version
+        // version with named arguments
 //        out(resultBuffers[0], mapSeq("loop", AType.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), arowType, arowType), [&](MutableArrayRef<BlockArgument> args) {
 //                                           auto arow = args[0];
 //                                           rise_return(mapSeq("loop", BType_trans.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), bcolType, bcolType), [&](MutableArrayRef<BlockArgument> args) {
@@ -425,9 +345,9 @@ struct DotOpConversion
 //                                         }), A));
 
       // extremely short version without naming blockArgs in between.
-        out(resultBuffers[0], mapSeq("loop", AType.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), arowType, arowType), [&](auto args) {
-          return (mapSeq("loop", BType_trans.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), bcolType, bcolType), [&](auto args) {
-            return (reduceSeq("loop", arowType.getSize(), elementType, elementType, lambda(rise::FunType::get(rewriter.getContext(), Tuple::get(rewriter.getContext(), elementType, elementType),rise::FunType::get(rewriter.getContext(), elementType, elementType)), [&](auto args){
+        out(resultBuffers[0], mapSeq("loop", AType.getSize(), arowType, arowType, lambda(funtype(arowType, arowType), [&](auto args) {
+          return (mapSeq("loop", BType_trans.getSize(), arowType, arowType, lambda(funtype(bcolType, bcolType), [&](auto args) {
+            return (reduceSeq("loop", arowType.getSize(), elementType, elementType, lambda(funtype(tuple(elementType, elementType), funtype(elementType, elementType)), [&](auto args){
               return (embed(elementType, ValueRange{fst(elementType, elementType, args[0]), snd(elementType, elementType, args[0]), args[1]}, [&](auto args){
                 return(args[0] * args[1] + args[2]);
               }));
