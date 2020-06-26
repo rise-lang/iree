@@ -294,22 +294,7 @@ static void generateRiseMM(OpBuilder builder, Location loc, int M, int N, int K,
   Value in_B = in(B, BType);
 
   // clang-format off
-  // version with named arguments
-//        out(resultBuffers[0], mapSeq("loop", AType.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), arowType, arowType), [&](MutableArrayRef<BlockArgument> args) {
-//                                           auto arow = args[0];
-//                                           rise_return(mapSeq("loop", BType_trans.getSize(), arowType, arowType, lambda(rise::FunType::get(rewriter.getContext(), bcolType, bcolType), [&](MutableArrayRef<BlockArgument> args) {
-//                                                 auto bcol = args[0];
-//                                                 rise_return(reduceSeq("loop", arowType.getSize(), elementType, elementType, lambda(rise::FunType::get(rewriter.getContext(), Tuple::get(rewriter.getContext(), elementType, elementType),rise::FunType::get(rewriter.getContext(),elementType, elementType)), [&](MutableArrayRef<BlockArgument> args){
-//                                                   auto tuple = args[0];
-//                                                   auto acc = args[1];
-//                                                   rise_return(embed(elementType, ValueRange{fst(elementType, elementType, tuple), snd(elementType, elementType, tuple), acc}, [&](MutableArrayRef<BlockArgument> args){
-//                                                     rise_return(args[0] * args[1] + args[2]);
-//                                                   }));
-//                                                 }),literal(elementType, "0.000000"), zip(arowType.getSize(), elementType, elementType, arow, bcol)));
-//                                               }), transpose(BType.getSize(), BType_trans.getSize(), elementType, B)));
-//                                         }), A));
-
-  // extremely short version without naming blockArgs in between.
+  // TODO: make this even simpler, make args[i] named instead of indicee access
   out(C, mapSeq("loop", AType.getSize(), arowType, arowType, lambda(funtype(arowType, arowType), [&](auto args) {
     return (mapSeq("loop", BType_trans.getSize(), arowType, arowType, lambda(funtype(bcolType, bcolType), [&](auto args) {
       return (reduceSeq("loop", arowType.getSize(), elementType, elementType, lambda(funtype(tuple(elementType, elementType), funtype(elementType, elementType)), [&](auto args){
@@ -323,6 +308,76 @@ static void generateRiseMM(OpBuilder builder, Location loc, int M, int N, int K,
   // clang-format on
   return;
 }
+
+// input:n.f32 -> output:n.f32
+void generateStencil(OpBuilder builder, Location loc, int n, Value input,
+                     Value output) {
+  using namespace mlir;
+  using namespace mlir::edsc;
+  using namespace mlir::edsc::op;
+  using namespace mlir::edsc::type;
+  using namespace mlir::edsc::abstraction;
+
+  mlir::edsc::ScopedContext scope(builder, loc);
+
+  int slidingWindow = 3;
+
+  Value A = in(input, array(n, scalarF32()));
+
+  Value padded = padClamp(nat(1), nat(1), A);
+  Value windowed = slide(nat(slidingWindow), nat(1), padded);
+
+  Value mapped = mapSeq(
+      "loop", array(slidingWindow, scalarF32()), scalarF32(),
+      [&](auto args) {
+        return (reduceSeq("loop", sumLambda(scalarF32()),
+                          literal(scalarF32(), "0.000000"), args[0]));
+      },
+      windowed);
+
+  out(output, mapped);
+}
+
+// input:n.n.f32 -> output:n.n.f32
+void generate2DStencil(OpBuilder builder, Location loc, int n, Value input,
+                       Value output) {
+  using namespace mlir;
+  using namespace mlir::edsc;
+  using namespace mlir::edsc::op;
+  using namespace mlir::edsc::type;
+  using namespace mlir::edsc::abstraction;
+
+  mlir::edsc::ScopedContext scope(builder, loc);
+
+  int slidingWindow = 3;
+
+  Value A = in(input, array(n, array(n, scalarF32())));
+  Value slided = slide2d(nat(3), nat(1), nat(5), nat(1), A);
+
+  //  Value padded = padClamp(nat(1), nat(1), A);
+  //  Value windowed = slide(nat(slidingWindow), nat(1), padded);
+
+  //  Value mapped = mapSeq("loop", array(slidingWindow, scalarF32()),
+  //  scalarF32(),  [&](auto args) {
+  //    return (reduceSeq("loop", sumLambda(scalarF32()), literal(scalarF32(),
+  //    "0.000000"), args[0]));
+  //  }, windowed);
+
+  //  Value mapped = mapSeq("loop", array(slidingWindow, scalarF32()),
+  //  scalarF32(), lambda(funtype(array(slidingWindow, scalarF32()),
+  //  scalarF32()), [&](auto args) {
+  //    return (reduceSeq("loop", sumLambda(scalarF32()), literal(scalarF32(),
+  //    "0.000000"), args[0]));
+  //  }), windowed);
+
+  out(output, slided);
+}
+
+// generate what I have in my testfiles for tests.
+// alloc arrays, fill them with data
+// forward declare print_memref
+// call
+void generateTest() { return; }
 
 namespace {
 /// Converts xla_hlo.dot operation to rise matrix mutliplication program
@@ -362,6 +417,17 @@ struct DotOpConversion
         generateRiseMM(builder, op.getLoc(), lhsShape[0], lhsShape[1],
                        rhsShape[1], inputBuffers[0], inputBuffers[1],
                        resultBuffers[0]);
+
+        // Only to test generating expressions:
+        //        generateStencil(builder, op.getLoc(), lhsShape[0],
+        //        inputBuffers[0],
+        //                        resultBuffers[0]);
+
+        //        generate2DStencil(builder, op.getLoc(), lhsShape[0],
+        //        inputBuffers[0],
+        //                        resultBuffers[0]);
+
+        op.getParentOfType<FuncOp>().dump();
       }
       return success();
     }
