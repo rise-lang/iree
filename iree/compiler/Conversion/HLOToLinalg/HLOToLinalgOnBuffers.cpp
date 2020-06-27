@@ -36,6 +36,7 @@
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Rise/EDSC/Builders.h"
 #include "mlir/Dialect/Rise/IR/Dialect.h"
+#include "mlir/Dialect/SCF/EDSC/Builders.h"
 #include "mlir/Dialect/StandardOps/EDSC/Intrinsics.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/AffineExpr.h"
@@ -373,11 +374,65 @@ void generate2DStencil(OpBuilder builder, Location loc, int n, Value input,
   out(output, slided);
 }
 
-// generate what I have in my testfiles for tests.
-// alloc arrays, fill them with data
-// forward declare print_memref
-// call
-void generateTest() { return; }
+// utility for testing the generated stuff
+void generateTest(OpBuilder builder, Location loc, int dims,
+                  ArrayRef<int64_t> inSizes, ArrayRef<int64_t> outSizes) {
+  using namespace mlir;
+  using namespace mlir::edsc;
+  using namespace mlir::edsc::op;
+  using namespace mlir::edsc::intrinsics;
+
+  ScopedContext scope(builder, loc);
+
+  auto f32Type = FloatType::getF32(scope.getContext());
+
+  if (!((dims == inSizes.size()) && (dims == outSizes.size()))) {
+    emitError(loc) << "Generating test failed. Dims has to match number of "
+                      "input and output sizes!";
+    return;
+  }
+
+  auto inMemrefType = MemRefType::get(inSizes, f32Type, {}, 0);
+  auto outMemrefType = MemRefType::get(outSizes, f32Type, {}, 0);
+
+  //  Value[dims] lbs = std_constant_index(inSizes);
+  SmallVector<Value, 4> lbs;
+  SmallVector<Value, 4> ubs;
+  SmallVector<Value, 4> steps;
+
+  for (int i = 0; i < dims; i++) {
+    lbs.push_back(std_constant_index(0));
+    ubs.push_back(std_constant_index(inSizes[i]));
+    steps.push_back(std_constant_index(1));
+  }
+
+  Value inMemref = std_alloc(inMemrefType);
+  Value outMemref = std_alloc(inMemrefType);
+
+  TemplatedIndexedValue<std_load, std_store> in(inMemref);
+  TemplatedIndexedValue<std_load, std_store> out(outMemref);
+
+  Value cst0f = std_constant_float(llvm::APFloat(0.0f), f32Type);
+  Value cst1f = std_constant_float(llvm::APFloat(1.0f), f32Type);
+  TemplatedIndexedValue<std_load, std_store> initVal(
+      std_alloc(MemRefType::get({}, f32Type, {}, 0)));
+  initVal = cst0f;
+
+  // just initializing the input with ascending values starting with 0
+  Value ivs[dims];
+  loopNestBuilder(lbs, ubs, steps, [&](auto ivs) {
+    // bring ivs from ValueRange -> SmallVector to be usable by
+    // TemplatedIndexedValue
+    SmallVector<Value, 4> ivs_vector;
+    for (int i = 0; i < dims; i++) {
+      ivs_vector.push_back(ivs[0]);
+    }
+    in(ivs_vector) = initVal();
+    initVal = initVal + cst1f;
+  });
+
+  std_memref_cast(outMemref, UnrankedMemRefType::get(f32Type, 0));
+}
 
 namespace {
 /// Converts xla_hlo.dot operation to rise matrix mutliplication program
@@ -426,6 +481,9 @@ struct DotOpConversion
         //        generate2DStencil(builder, op.getLoc(), lhsShape[0],
         //        inputBuffers[0],
         //                        resultBuffers[0]);
+
+        //        generateTest(builder, op.getLoc(), 5, {2, 5, 8, 11, 12},
+        //                     {2, 5, 8, 11, 12});
 
         op.getParentOfType<FuncOp>().dump();
       }
