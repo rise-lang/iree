@@ -354,6 +354,14 @@ void generate2DStencil(OpBuilder builder, Location loc, int n, Value input,
 
   Value A = in(input, array(n, array(n, scalarF32())));
   Value slided = slide2d(nat(3), nat(1), nat(5), nat(1), A);
+  ArrayType slidedType = array(n-2, array(n-4, array(3, array(5, scalarF32()))));
+
+
+  Value mapped = mapSeq("loop", slidedType.getElementType(), array(n-2, array(n-4, scalarF32())), [&](auto args){
+    return mapSeq("loop", array(3, array(5, scalarF32())), scalarF32(), [&](auto args){
+              Value flattened =
+            }, args[0]);
+  }, slided);
 
   //  Value padded = padClamp(nat(1), nat(1), A);
   //  Value windowed = slide(nat(slidingWindow), nat(1), padded);
@@ -375,7 +383,7 @@ void generate2DStencil(OpBuilder builder, Location loc, int n, Value input,
 }
 
 // utility for testing the generated stuff
-void generateTest(OpBuilder builder, Location loc, int dims,
+void generateTest(OpBuilder builder, Location loc, FuncOp riseFun, int dims,
                   ArrayRef<int64_t> inSizes, ArrayRef<int64_t> outSizes) {
   using namespace mlir;
   using namespace mlir::edsc;
@@ -407,7 +415,7 @@ void generateTest(OpBuilder builder, Location loc, int dims,
   }
 
   Value inMemref = std_alloc(inMemrefType);
-  Value outMemref = std_alloc(inMemrefType);
+  Value outMemref = std_alloc(outMemrefType);
 
   TemplatedIndexedValue<std_load, std_store> in(inMemref);
   TemplatedIndexedValue<std_load, std_store> out(outMemref);
@@ -431,7 +439,10 @@ void generateTest(OpBuilder builder, Location loc, int dims,
     initVal = initVal + cst1f;
   });
 
-  std_memref_cast(outMemref, UnrankedMemRefType::get(f32Type, 0));
+  std_call(riseFun, ValueRange{inMemref, outMemref});
+  Value castedOut = std_memref_cast(outMemref, UnrankedMemRefType::get(f32Type, 0));
+  std_call("print_memref_f32", ArrayRef<Type>(), ValueRange{castedOut});
+
 }
 
 namespace {
@@ -468,22 +479,63 @@ struct DotOpConversion
                   << rhsShape[1] << "]\n\n"
                   << std::flush;
 
+        // setup
         OpBuilder builder(op);
-        generateRiseMM(builder, op.getLoc(), lhsShape[0], lhsShape[1],
-                       rhsShape[1], inputBuffers[0], inputBuffers[1],
-                       resultBuffers[0]);
+        int inDims = 2;
+        int outDims = 2;
+        auto inShapes = {lhsShape[0], lhsShape[0]};
+        auto outShapes = {lhsShape[0] - 2, lhsShape[0] - 2};
+        Type elementType = FloatType::getF32(builder.getContext());
+
+        FuncOp riseFun = builder.create<FuncOp>(
+            op.getLoc(), StringRef("rise_fun"),
+            FunctionType::get({MemRefType::get(inShapes, elementType, {}, 0),
+                               MemRefType::get(outShapes, elementType, {}, 0)},
+                              {}, builder.getContext()),
+            ArrayRef<NamedAttribute>{});
+        Block *riseFunBlock = riseFun.addEntryBlock();
+        builder.setInsertionPointToStart(riseFunBlock);
+
+        /////////////////////// insert rise program here ///////////////////////
+
+        //        generateRiseMM(builder, op.getLoc(), lhsShape[0], lhsShape[1],
+        //                       rhsShape[1], inputBuffers[0], inputBuffers[1],
+        //                       resultBuffers[0]);
 
         // Only to test generating expressions:
         //        generateStencil(builder, op.getLoc(), lhsShape[0],
         //        inputBuffers[0],
         //                        resultBuffers[0]);
 
-        //        generate2DStencil(builder, op.getLoc(), lhsShape[0],
-        //        inputBuffers[0],
-        //                        resultBuffers[0]);
+        generate2DStencil(builder, op.getLoc(), lhsShape[0],
+                          riseFunBlock->getArgument(0),
+                          riseFunBlock->getArgument(1));
 
-        //        generateTest(builder, op.getLoc(), 5, {2, 5, 8, 11, 12},
-        //                     {2, 5, 8, 11, 12});
+        ////////////////////////////////////////////////////////////////////////
+
+        builder.create<ReturnOp>(op.getLoc());
+
+        builder.setInsertionPointAfter(riseFun);
+        FuncOp testFun = builder.create<FuncOp>(
+            op.getLoc(), StringRef("test_fun"),
+            FunctionType::get({}, {}, builder.getContext()),
+            ArrayRef<NamedAttribute>{});
+        builder.setInsertionPointToStart(testFun.addEntryBlock());
+
+        ///////////////////////// specify test here ////////////////////////////
+
+        generateTest(builder, op.getLoc(), riseFun, 2, inShapes, outShapes);
+
+
+        //        generateTest(builder, op.getLoc(), 1, {32}, {64});
+        //                generateTest(builder, op.getLoc(), 5, {2, 5, 8, 11,
+        //                12},
+        //                             {2, 5, 8, 11, 12});
+
+
+        ////////////////////////////////////////////////////////////////////////
+
+        builder.create<ReturnOp>(op.getLoc());
 
         op.getParentOfType<FuncOp>().dump();
       }
