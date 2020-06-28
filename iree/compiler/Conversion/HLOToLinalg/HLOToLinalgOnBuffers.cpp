@@ -295,16 +295,15 @@ static void generateRiseMM(OpBuilder builder, Location loc, int M, int N, int K,
   Value in_B = in(B, BType);
 
   // clang-format off
-  // TODO: make this even simpler, make args[i] named instead of indicee access
-  out(C, mapSeq("loop", AType.getSize(), arowType, arowType, lambda(funtype(arowType, arowType), [&](auto args) {
-    return (mapSeq("loop", BType_trans.getSize(), arowType, arowType, lambda(funtype(bcolType, bcolType), [&](auto args) {
-      return (reduceSeq("loop", arowType.getSize(), elementType, elementType, lambda(funtype(tuple(elementType, elementType), funtype(elementType, elementType)), [&](auto args){
-        return (embed(elementType, ValueRange{fst(elementType, elementType, args[0]), snd(elementType, elementType, args[0]), args[1]}, [&](auto args){
+  out(C, mapSeq("loop", arowType, [&](Value arow) {
+    return (mapSeq("loop", bcolType,  [&](Value bcol) {
+      return (reduceSeq("loop", elementType, [&](Value acc, Value tuple){
+        return (embed(elementType, ValueRange{fst(elementType, elementType, tuple), snd(elementType, elementType, tuple), acc}, [&](auto args){
           return(args[0] * args[1] + args[2]);
         }));
-      }),literal(elementType, "0.000000"), zip(arowType.getSize(), elementType, elementType, args[0], args[0])));
-    }), transpose(BType.getSize(), BType_trans.getSize(), elementType, in_B)));
-  }), in_A));
+      },literal(elementType, "0.000000"), zip(arowType.getSize(), elementType, elementType, arow, bcol)));
+    }, transpose(BType.getSize(), BType_trans.getSize(), elementType, in_B)));
+  }, in_A));
 
   // clang-format on
   return;
@@ -330,9 +329,9 @@ void generateStencil(OpBuilder builder, Location loc, int n, Value input,
 
   Value mapped = mapSeq(
       "loop", array(slidingWindow, scalarF32()), scalarF32(),
-      [&](auto args) {
-        return (reduceSeq("loop", sumLambda(scalarF32()),
-                          literal(scalarF32(), "0.000000"), args[0]));
+      [&](Value window) {
+        return (reduceSeq("loop", scalarF32(), sumLambda(scalarF32()),
+                          literal(scalarF32(), "0.000000"), window));
       },
       windowed);
 
@@ -360,15 +359,15 @@ void generate2DStencil(OpBuilder builder, Location loc, int n, Value input,
   Value mapped = mapSeq(
       "loop", slidedType.getElementType(),
       array(n-4, scalarF32()),
-      [&](auto args) {
+      [&](auto arg) {
         return mapSeq(
             "loop", array(3, array(5, scalarF32())), scalarF32(),
-            [&](auto args) {
-              Value flattened = join(args[0]);
-              return reduceSeq("loop", sumLambda(scalarF32()),
+            [&](auto arg) {
+              Value flattened = join(arg);
+              return reduceSeq("loop", scalarF32(), sumLambda(scalarF32()),
                                literal(scalarF32(), "0.000000"), flattened);
             },
-            args[0]);
+            arg);
       },
       slided);
 
