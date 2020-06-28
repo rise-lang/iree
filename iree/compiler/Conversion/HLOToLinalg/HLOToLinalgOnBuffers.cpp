@@ -295,11 +295,13 @@ static void generateRiseMM(OpBuilder builder, Location loc, int M, int N, int K,
   Value in_B = in(B, BType);
 
   // clang-format off
-  out(C, mapSeq("loop", arowType, [&](Value arow) {
-    return (mapSeq("loop", bcolType,  [&](Value bcol) {
-      return (reduceSeq("loop", elementType, [&](Value acc, Value tuple){
-        return (embed(elementType, ValueRange{fst(elementType, elementType, tuple), snd(elementType, elementType, tuple), acc}, [&](auto args){
-          return(args[0] * args[1] + args[2]);
+  out(C, mapSeq(arowType, [&](Value arow) {
+    return (mapSeq(bcolType,  [&](Value bcol) {
+      return (reduceSeq(elementType, [&](Value tuple, Value acc){
+        return (embed3(elementType, ValueRange{fst(elementType, elementType, tuple),
+                                                           snd(elementType, elementType, tuple), acc},
+          [&](Value fst, Value snd, Value acc){
+            return(fst * snd + acc);
         }));
       },literal(elementType, "0.000000"), zip(arowType.getSize(), elementType, elementType, arow, bcol)));
     }, transpose(BType.getSize(), BType_trans.getSize(), elementType, in_B)));
@@ -357,8 +359,7 @@ void generate2DStencil(OpBuilder builder, Location loc, int n, Value input,
       array(n - 2, array(nat(n - 4), array(3, array(5, scalarF32()))));
 
   Value mapped = mapSeq(
-      "loop", slidedType.getElementType(),
-      array(n-4, scalarF32()),
+      "loop", slidedType.getElementType(), array(n - 4, scalarF32()),
       [&](auto arg) {
         return mapSeq(
             "loop", array(3, array(5, scalarF32())), scalarF32(),
@@ -392,7 +393,8 @@ void generate2DStencil(OpBuilder builder, Location loc, int n, Value input,
 
 // utility for testing the generated stuff
 void generateTest(OpBuilder builder, Location loc, int dims,
-                  ArrayRef<int64_t> inSizes, ArrayRef<int64_t> outSizes, FuncOp riseFun = nullptr) {
+                  ArrayRef<int64_t> inSizes, ArrayRef<int64_t> outSizes,
+                  FuncOp riseFun = nullptr) {
   using namespace mlir;
   using namespace mlir::edsc;
   using namespace mlir::edsc::op;
@@ -491,59 +493,62 @@ struct DotOpConversion
 
         // setup
         OpBuilder builder(op);
-//        int inDims = 2;
-//        int outDims = 2;
-//        ArrayRef<int64_t> inShapes = {50,50};//{lhsShape[0], lhsShape[0]};
-//        ArrayRef<int64_t> outShapes = {48,46};//{lhsShape[0] - 2, lhsShape[0] - 2};
-//        Type elementType = FloatType::getF32(builder.getContext());
-//
-//        FuncOp riseFun = builder.create<FuncOp>(
-//            op.getLoc(), StringRef("rise_fun"),
-//            FunctionType::get({MemRefType::get(inShapes, elementType, {}, 0),
-//                               MemRefType::get(outShapes, elementType, {}, 0)},
-//                              {}, builder.getContext()),
-//            ArrayRef<NamedAttribute>{});
-//        Block *riseFunBlock = riseFun.addEntryBlock();
-//        builder.setInsertionPointToStart(riseFunBlock);
+        //        int inDims = 2;
+        //        int outDims = 2;
+        //        ArrayRef<int64_t> inShapes = {50,50};//{lhsShape[0],
+        //        lhsShape[0]}; ArrayRef<int64_t> outShapes =
+        //        {48,46};//{lhsShape[0] - 2, lhsShape[0] - 2}; Type elementType
+        //        = FloatType::getF32(builder.getContext());
+        //
+        //        FuncOp riseFun = builder.create<FuncOp>(
+        //            op.getLoc(), StringRef("rise_fun"),
+        //            FunctionType::get({MemRefType::get(inShapes, elementType,
+        //            {}, 0),
+        //                               MemRefType::get(outShapes, elementType,
+        //                               {}, 0)},
+        //                              {}, builder.getContext()),
+        //            ArrayRef<NamedAttribute>{});
+        //        Block *riseFunBlock = riseFun.addEntryBlock();
+        //        builder.setInsertionPointToStart(riseFunBlock);
 
         /////////////////////// insert rise program here ///////////////////////
 
-                generateRiseMM(builder, op.getLoc(), lhsShape[0], lhsShape[1],
-                               rhsShape[1], inputBuffers[0], inputBuffers[1],
-                               resultBuffers[0]);
+        generateRiseMM(builder, op.getLoc(), lhsShape[0], lhsShape[1],
+                       rhsShape[1], inputBuffers[0], inputBuffers[1],
+                       resultBuffers[0]);
 
         // Only to test generating expressions:
         //        generateStencil(builder, op.getLoc(), lhsShape[0],
         //        inputBuffers[0],
         //                        resultBuffers[0]);
 
-//        generate2DStencil(builder, op.getLoc(), 50,
-//                          riseFunBlock->getArgument(0),
-//                          riseFunBlock->getArgument(1));
+        //        generate2DStencil(builder, op.getLoc(), 50,
+        //                          riseFunBlock->getArgument(0),
+        //                          riseFunBlock->getArgument(1));
 
         ////////////////////////////////////////////////////////////////////////
 
-//        builder.create<ReturnOp>(op.getLoc());
-//
-//        builder.setInsertionPointAfter(riseFun);
-//        FuncOp testFun = builder.create<FuncOp>(
-//            op.getLoc(), StringRef("test_fun"),
-//            FunctionType::get({}, {}, builder.getContext()),
-//            ArrayRef<NamedAttribute>{});
-//        builder.setInsertionPointToStart(testFun.addEntryBlock());
+        //        builder.create<ReturnOp>(op.getLoc());
+        //
+        //        builder.setInsertionPointAfter(riseFun);
+        //        FuncOp testFun = builder.create<FuncOp>(
+        //            op.getLoc(), StringRef("test_fun"),
+        //            FunctionType::get({}, {}, builder.getContext()),
+        //            ArrayRef<NamedAttribute>{});
+        //        builder.setInsertionPointToStart(testFun.addEntryBlock());
 
         ///////////////////////// specify test here ////////////////////////////
 
-//        generateTest(builder, op.getLoc(), 2, inShapes, outShapes, riseFun);
+        //        generateTest(builder, op.getLoc(), 2, inShapes, outShapes,
+        //        riseFun);
 
         //        generateTest(builder, op.getLoc(), 1, {32}, {64});
         //                generateTest(builder, op.getLoc(), 5, {2, 5, 8, 11,
         //                12},
         //                             {2, 5, 8, 11, 12});
-//        builder.create<ReturnOp>(op.getLoc());
+        //        builder.create<ReturnOp>(op.getLoc());
 
         ////////////////////////////////////////////////////////////////////////
-
 
         op.getParentOfType<FuncOp>().dump();
       }
