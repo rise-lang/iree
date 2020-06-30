@@ -278,12 +278,12 @@ static void generateRiseMM(OpBuilder builder, Location loc, int M, int N, int K,
   mlir::edsc::ScopedContext scope(builder, loc);
 
   // shape of A
-  ArrayType AType = array2D(M, N, scalarF32());
+  ArrayType AType = array2DType(M, N, scalarF32Type());
   rise::ArrayType arowType = AType.getElementType().dyn_cast<rise::ArrayType>();
 
   // shape of B
-  rise::ArrayType BType = array2D(N, K, scalarF32());
-  rise::ArrayType BType_trans = array2D(K, N, scalarF32());
+  rise::ArrayType BType = array2DType(N, K, scalarF32Type());
+  rise::ArrayType BType_trans = array2DType(K, N, scalarF32Type());
   rise::ArrayType bcolType =
       BType_trans.getElementType().dyn_cast<rise::ArrayType>();
 
@@ -306,7 +306,6 @@ static void generateRiseMM(OpBuilder builder, Location loc, int M, int N, int K,
       },literal(elementType, "0.000000"), zip(arowType.getSize(), elementType, elementType, arow, bcol)));
     }, transpose(BType.getSize(), BType_trans.getSize(), elementType, in_B)));
   }, in_A));
-
   // clang-format on
   return;
 }
@@ -324,16 +323,16 @@ void generateStencil(OpBuilder builder, Location loc, int n, Value input,
 
   int slidingWindow = 3;
 
-  Value A = in(input, array(n, scalarF32()));
+  Value A = in(input, arrayType(n, scalarF32Type()));
 
-  Value padded = padClamp(nat(1), nat(1), A);
-  Value windowed = slide(nat(slidingWindow), nat(1), padded);
+  Value padded = padClamp(natType(1), natType(1), A);
+  Value windowed = slide(natType(slidingWindow), natType(1), padded);
 
   Value mapped = mapSeq(
-      "loop", array(slidingWindow, scalarF32()), scalarF32(),
+      "loop", arrayType(slidingWindow, scalarF32Type()), scalarF32Type(),
       [&](Value window) {
-        return (reduceSeq("loop", scalarF32(), sumLambda(scalarF32()),
-                          literal(scalarF32(), "0.000000"), window));
+        return (reduceSeq("loop", scalarF32Type(), sumLambda(scalarF32Type()),
+                          literal(scalarF32Type(), "0.000000"), window));
       },
       windowed);
 
@@ -353,39 +352,42 @@ void generate2DStencil(OpBuilder builder, Location loc, int n, Value input,
 
   int slidingWindow = 3;
 
-  Value A = in(input, array(n, array(n, scalarF32())));
-  Value slided = slide2d(nat(3), nat(1), nat(5), nat(1), A);
-  ArrayType slidedType =
-      array(n - 2, array(nat(n - 4), array(3, array(5, scalarF32()))));
+  Value A = in(input, arrayType(n, arrayType(n, scalarF32Type())));
+  Value slizzled = slide2d(natType(3), natType(1), natType(5), natType(1), A);
+  ArrayType slidedType = arrayType(
+      n - 2,
+      arrayType(natType(n - 4), arrayType(3, arrayType(5, scalarF32Type()))));
 
   Value mapped = mapSeq(
-      "loop", slidedType.getElementType(), array(n - 4, scalarF32()),
-      [&](auto arg) {
+      "loop", slidedType.getElementType(), arrayType(n - 4, scalarF32Type()),
+      [&](auto nestedArray) {
         return mapSeq(
-            "loop", array(3, array(5, scalarF32())), scalarF32(),
-            [&](auto arg) {
-              Value flattened = join(arg);
-              return reduceSeq("loop", scalarF32(), sumLambda(scalarF32()),
-                               literal(scalarF32(), "0.000000"), flattened);
+            "loop", arrayType(3, arrayType(5, scalarF32Type())),
+            scalarF32Type(),
+            [&](auto slidingWindow) {
+              Value flattenedWindow = join(slidingWindow);
+              return reduceSeq(
+                  "loop", scalarF32Type(), sumLambda(scalarF32Type()),
+                  literal(scalarF32Type(), "0.000000"), flattenedWindow);
             },
-            arg);
+            nestedArray);
       },
-      slided);
+      slizzled);
 
-  //  Value padded = padClamp(nat(1), nat(1), A);
-  //  Value windowed = slide(nat(slidingWindow), nat(1), padded);
+  //  Value padded = padClamp(natType(1), natType(1), A);
+  //  Value windowed = slide(natType(slidingWindow), natType(1), padded);
 
-  //  Value mapped = mapSeq("loop", array(slidingWindow, scalarF32()),
-  //  scalarF32(),  [&](auto args) {
-  //    return (reduceSeq("loop", sumLambda(scalarF32()), literal(scalarF32(),
-  //    "0.000000"), args[0]));
+  //  Value mapped = mapSeq("loop", arrayType(slidingWindow, scalarF32Type()),
+  //  scalarF32Type(),  [&](auto args) {
+  //    return (reduceSeq("loop", sumLambda(scalarF32Type()),
+  //    literal(scalarF32Type(), "0.000000"), args[0]));
   //  }, windowed);
 
-  //  Value mapped = mapSeq("loop", array(slidingWindow, scalarF32()),
-  //  scalarF32(), lambda(funtype(array(slidingWindow, scalarF32()),
-  //  scalarF32()), [&](auto args) {
-  //    return (reduceSeq("loop", sumLambda(scalarF32()), literal(scalarF32(),
-  //    "0.000000"), args[0]));
+  //  Value mapped = mapSeq("loop", arrayType(slidingWindow, scalarF32Type()),
+  //  scalarF32Type(), lambda(funtype(arrayType(slidingWindow, scalarF32Type()),
+  //  scalarF32Type()), [&](auto args) {
+  //    return (reduceSeq("loop", sumLambda(scalarF32Type()),
+  //    literal(scalarF32Type(), "0.000000"), args[0]));
   //  }), windowed);
 
   out(output, mapped);
@@ -436,14 +438,14 @@ void generateTest(OpBuilder builder, Location loc, int dims,
       std_alloc(MemRefType::get({}, f32Type, {}, 0)));
   initVal = cst0f;
 
-  // just initializing the input with ascending values starting with 0
+  // initializing the input with ascending values starting with 0
   Value ivs[dims];
   loopNestBuilder(lbs, ubs, steps, [&](auto ivs) {
     // bring ivs from ValueRange -> SmallVector to be usable by
     // TemplatedIndexedValue
     SmallVector<Value, 4> ivs_vector;
     for (int i = 0; i < dims; i++) {
-      ivs_vector.push_back(ivs[0]);
+      ivs_vector.push_back(ivs[i]);
     }
     in(ivs_vector) = initVal();
     initVal = initVal + cst1f;
@@ -495,10 +497,11 @@ struct DotOpConversion
         OpBuilder builder(op);
         //        int inDims = 2;
         //        int outDims = 2;
-        //        ArrayRef<int64_t> inShapes = {50,50};//{lhsShape[0],
-        //        lhsShape[0]}; ArrayRef<int64_t> outShapes =
-        //        {48,46};//{lhsShape[0] - 2, lhsShape[0] - 2}; Type elementType
-        //        = FloatType::getF32(builder.getContext());
+        //        ArrayRef<int64_t> inShapes = {50, 50};
+        //        //{lhsShape[0],lhsShape[0]};
+        //        ArrayRef<int64_t> outShapes = {48, 46};
+        //        //{lhsShape[0] - 2, lhsShape[0] - 2};
+        //        Type elementType = FloatType::getF32(builder.getContext());
         //
         //        FuncOp riseFun = builder.create<FuncOp>(
         //            op.getLoc(), StringRef("rise_fun"),
@@ -510,7 +513,7 @@ struct DotOpConversion
         //            ArrayRef<NamedAttribute>{});
         //        Block *riseFunBlock = riseFun.addEntryBlock();
         //        builder.setInsertionPointToStart(riseFunBlock);
-
+        //
         /////////////////////// insert rise program here ///////////////////////
 
         generateRiseMM(builder, op.getLoc(), lhsShape[0], lhsShape[1],
@@ -522,12 +525,15 @@ struct DotOpConversion
         //        inputBuffers[0],
         //                        resultBuffers[0]);
 
+        //        generate2DStencil(builder, op.getLoc(), 50, inputBuffers[0],
+        //                          resultBuffers[0]);
+
         //        generate2DStencil(builder, op.getLoc(), 50,
         //                          riseFunBlock->getArgument(0),
         //                          riseFunBlock->getArgument(1));
 
         ////////////////////////////////////////////////////////////////////////
-
+        //
         //        builder.create<ReturnOp>(op.getLoc());
         //
         //        builder.setInsertionPointAfter(riseFun);
@@ -536,18 +542,20 @@ struct DotOpConversion
         //            FunctionType::get({}, {}, builder.getContext()),
         //            ArrayRef<NamedAttribute>{});
         //        builder.setInsertionPointToStart(testFun.addEntryBlock());
-
-        ///////////////////////// specify test here ////////////////////////////
-
+        //
+        //        ///////////////////////// specify test here
+        //        ////////////////////////////
+        //
         //        generateTest(builder, op.getLoc(), 2, inShapes, outShapes,
         //        riseFun);
-
-        //        generateTest(builder, op.getLoc(), 1, {32}, {64});
-        //                generateTest(builder, op.getLoc(), 5, {2, 5, 8, 11,
-        //                12},
-        //                             {2, 5, 8, 11, 12});
+        //
+        //        //        generateTest(builder, op.getLoc(), 1, {32}, {64});
+        //        //                generateTest(builder, op.getLoc(), 5, {2, 5,
+        //        8, 11,
+        //        //                12},
+        //        //                             {2, 5, 8, 11, 12});
         //        builder.create<ReturnOp>(op.getLoc());
-
+        //
         ////////////////////////////////////////////////////////////////////////
 
         op.getParentOfType<FuncOp>().dump();
