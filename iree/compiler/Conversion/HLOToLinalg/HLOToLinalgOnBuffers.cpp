@@ -35,6 +35,7 @@
 #include "mlir/Dialect/Linalg/IR/LinalgTypes.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/Rise/EDSC/Builders.h"
+#include "mlir/Dialect/Rise/EDSC/HighLevel.h"
 #include "mlir/Dialect/Rise/IR/Dialect.h"
 #include "mlir/Dialect/SCF/EDSC/Builders.h"
 #include "mlir/Dialect/StandardOps/EDSC/Intrinsics.h"
@@ -267,198 +268,9 @@ static DotOperationType getDotOperationType(xla_hlo::DotOp dotOp) {
   return DotOperationType::Unsupported;
 }
 
-// A:MxN * B:NxK = C:MxK
-static void generateRiseMM(OpBuilder builder, Location loc, int M, int N, int K,
-                           Value A, Value B, Value C) {
-  using namespace mlir;
-  using namespace mlir::edsc;
-  using namespace mlir::edsc::op;
-  using namespace mlir::edsc::type;
-
-  mlir::edsc::ScopedContext scope(builder, loc);
-
-  // shape of A
-  ArrayType AType = array2D(M, N, scalarF32());
-  rise::ArrayType arowType = AType.getElementType().dyn_cast<rise::ArrayType>();
-
-  // shape of B
-  rise::ArrayType BType = array2D(N, K, scalarF32());
-  rise::ArrayType BType_trans = array2D(K, N, scalarF32());
-  rise::ArrayType bcolType =
-      BType_trans.getElementType().dyn_cast<rise::ArrayType>();
-
-  rise::ScalarType elementType =
-      arowType.getElementType().dyn_cast<rise::ScalarType>();
-
-  // These have to be always on top!
-  Value in_A = in(A, AType);
-  Value in_B = in(B, BType);
-
-  // clang-format off
-  out(C, mapSeq(arowType, [&](Value arow) {
-    return (mapSeq(bcolType,  [&](Value bcol) {
-      return (reduceSeq(elementType, [&](Value tuple, Value acc){
-        return (embed3(elementType, ValueRange{fst(elementType, elementType, tuple),
-                                                           snd(elementType, elementType, tuple), acc},
-          [&](Value fst, Value snd, Value acc){
-            return(fst * snd + acc);
-        }));
-      },literal(elementType, "0.000000"), zip(arowType.getSize(), elementType, elementType, arow, bcol)));
-    }, transpose(BType.getSize(), BType_trans.getSize(), elementType, in_B)));
-  }, in_A));
-
-  // clang-format on
-  return;
-}
-
-// input:n.f32 -> output:n.f32
-void generateStencil(OpBuilder builder, Location loc, int n, Value input,
-                     Value output) {
-  using namespace mlir;
-  using namespace mlir::edsc;
-  using namespace mlir::edsc::op;
-  using namespace mlir::edsc::type;
-  using namespace mlir::edsc::abstraction;
-
-  mlir::edsc::ScopedContext scope(builder, loc);
-
-  int slidingWindow = 3;
-
-  Value A = in(input, array(n, scalarF32()));
-
-  Value padded = padClamp(nat(1), nat(1), A);
-  Value windowed = slide(nat(slidingWindow), nat(1), padded);
-
-  Value mapped = mapSeq(
-      "loop", array(slidingWindow, scalarF32()), scalarF32(),
-      [&](Value window) {
-        return (reduceSeq("loop", scalarF32(), sumLambda(scalarF32()),
-                          literal(scalarF32(), "0.000000"), window));
-      },
-      windowed);
-
-  out(output, mapped);
-}
-
-// input:n.n.f32 -> output:n.n.f32
-void generate2DStencil(OpBuilder builder, Location loc, int n, Value input,
-                       Value output) {
-  using namespace mlir;
-  using namespace mlir::edsc;
-  using namespace mlir::edsc::op;
-  using namespace mlir::edsc::type;
-  using namespace mlir::edsc::abstraction;
-
-  mlir::edsc::ScopedContext scope(builder, loc);
-
-  int slidingWindow = 3;
-
-  Value A = in(input, array(n, array(n, scalarF32())));
-  Value slided = slide2d(nat(3), nat(1), nat(5), nat(1), A);
-  ArrayType slidedType =
-      array(n - 2, array(nat(n - 4), array(3, array(5, scalarF32()))));
-
-  Value mapped = mapSeq(
-      "loop", slidedType.getElementType(), array(n - 4, scalarF32()),
-      [&](auto arg) {
-        return mapSeq(
-            "loop", array(3, array(5, scalarF32())), scalarF32(),
-            [&](auto arg) {
-              Value flattened = join(arg);
-              return reduceSeq("loop", scalarF32(), sumLambda(scalarF32()),
-                               literal(scalarF32(), "0.000000"), flattened);
-            },
-            arg);
-      },
-      slided);
-
-  //  Value padded = padClamp(nat(1), nat(1), A);
-  //  Value windowed = slide(nat(slidingWindow), nat(1), padded);
-
-  //  Value mapped = mapSeq("loop", array(slidingWindow, scalarF32()),
-  //  scalarF32(),  [&](auto args) {
-  //    return (reduceSeq("loop", sumLambda(scalarF32()), literal(scalarF32(),
-  //    "0.000000"), args[0]));
-  //  }, windowed);
-
-  //  Value mapped = mapSeq("loop", array(slidingWindow, scalarF32()),
-  //  scalarF32(), lambda(funtype(array(slidingWindow, scalarF32()),
-  //  scalarF32()), [&](auto args) {
-  //    return (reduceSeq("loop", sumLambda(scalarF32()), literal(scalarF32(),
-  //    "0.000000"), args[0]));
-  //  }), windowed);
-
-  out(output, mapped);
-}
-
-// utility for testing the generated stuff
-void generateTest(OpBuilder builder, Location loc, int dims,
-                  ArrayRef<int64_t> inSizes, ArrayRef<int64_t> outSizes,
-                  FuncOp riseFun = nullptr) {
-  using namespace mlir;
-  using namespace mlir::edsc;
-  using namespace mlir::edsc::op;
-  using namespace mlir::edsc::intrinsics;
-
-  ScopedContext scope(builder, loc);
-
-  auto f32Type = FloatType::getF32(scope.getContext());
-
-  if (!((dims == inSizes.size()) && (dims == outSizes.size()))) {
-    emitError(loc) << "Generating test failed. Dims has to match number of "
-                      "input and output sizes!";
-    return;
-  }
-
-  auto inMemrefType = MemRefType::get(inSizes, f32Type, {}, 0);
-  auto outMemrefType = MemRefType::get(outSizes, f32Type, {}, 0);
-
-  //  Value[dims] lbs = std_constant_index(inSizes);
-  SmallVector<Value, 4> lbs;
-  SmallVector<Value, 4> ubs;
-  SmallVector<Value, 4> steps;
-
-  for (int i = 0; i < dims; i++) {
-    lbs.push_back(std_constant_index(0));
-    ubs.push_back(std_constant_index(inSizes[i]));
-    steps.push_back(std_constant_index(1));
-  }
-
-  Value inMemref = std_alloc(inMemrefType);
-  Value outMemref = std_alloc(outMemrefType);
-
-  TemplatedIndexedValue<std_load, std_store> in(inMemref);
-  TemplatedIndexedValue<std_load, std_store> out(outMemref);
-
-  Value cst0f = std_constant_float(llvm::APFloat(0.0f), f32Type);
-  Value cst1f = std_constant_float(llvm::APFloat(1.0f), f32Type);
-  TemplatedIndexedValue<std_load, std_store> initVal(
-      std_alloc(MemRefType::get({}, f32Type, {}, 0)));
-  initVal = cst0f;
-
-  // just initializing the input with ascending values starting with 0
-  Value ivs[dims];
-  loopNestBuilder(lbs, ubs, steps, [&](auto ivs) {
-    // bring ivs from ValueRange -> SmallVector to be usable by
-    // TemplatedIndexedValue
-    SmallVector<Value, 4> ivs_vector;
-    for (int i = 0; i < dims; i++) {
-      ivs_vector.push_back(ivs[0]);
-    }
-    in(ivs_vector) = initVal();
-    initVal = initVal + cst1f;
-  });
-
-  if (riseFun) {
-    std_call(riseFun, ValueRange{inMemref, outMemref});
-    Value castedOut =
-        std_memref_cast(outMemref, UnrankedMemRefType::get(f32Type, 0));
-    std_call("print_memref_f32", ArrayRef<Type>(), ValueRange{castedOut});
-  }
-}
 
 namespace {
-/// Converts xla_hlo.dot operation to rise matrix mutliplication program
+/// Converts xla_hlo.dot operation to linalg.matmul op
 template <DotOperationType opType, typename LinalgOpTy>
 struct DotOpConversion
     : public ConvertToLinalgBufferOp<DotOpConversion<opType, LinalgOpTy>,
@@ -473,15 +285,36 @@ struct DotOpConversion
         rewriter.notifyMatchFailure(op, "failed to zero fill result buffer");
         return failure();
       }
+      rewriter.create<LinalgOpTy>(op.getLoc(), inputBuffers[0], inputBuffers[1],
+                                  resultBuffers[0]);
+      return success();
+    }
+    return failure();
+  }
+};
+}  // namespace
 
+namespace {
+/// Converts xla_hlo.dot operation to rise matrix multiplication program
+template <DotOperationType opType, typename LinalgOpTy>
+struct RiseDotOpConversion
+    : public ConvertToLinalgBufferOp<RiseDotOpConversion<opType, LinalgOpTy>,
+                                     xla_hlo::DotOp> {
+  using ConvertToLinalgBufferOp<RiseDotOpConversion<opType, LinalgOpTy>,
+                                xla_hlo::DotOp>::ConvertToLinalgBufferOp;
+
+  LogicalResult apply(xla_hlo::DotOp op, ArrayRef<Value> inputBuffers,
+                      ArrayRef<Value> resultBuffers,
+                      ConversionPatternRewriter &rewriter) const {
+    if (getDotOperationType(op) == opType) {
+      if (failed(zeroFillBuffer(op.getLoc(), resultBuffers[0], rewriter))) {
+        rewriter.notifyMatchFailure(op, "failed to zero fill result buffer");
+        return failure();
+      }
       ArrayRef<int64_t> lhsShape =
           op.lhs().getType().cast<ShapedType>().getShape();
       ArrayRef<int64_t> rhsShape =
           op.rhs().getType().cast<ShapedType>().getShape();
-      auto shapeMatches = [](int64_t a, int64_t b) {
-        return a == ShapedType::kDynamicSize || b == ShapedType::kDynamicSize ||
-               a == b;
-      };
       if (opType != DotOperationType::MatrixMatrix) {
         rewriter.create<LinalgOpTy>(op.getLoc(), inputBuffers[0],
                                     inputBuffers[1], resultBuffers[0]);
@@ -491,14 +324,16 @@ struct DotOpConversion
                   << rhsShape[1] << "]\n\n"
                   << std::flush;
 
-        // setup
         OpBuilder builder(op);
+        edsc::ScopedContext scope(builder, op.getLoc());
+        // setup
         //        int inDims = 2;
         //        int outDims = 2;
-        //        ArrayRef<int64_t> inShapes = {50,50};//{lhsShape[0],
-        //        lhsShape[0]}; ArrayRef<int64_t> outShapes =
-        //        {48,46};//{lhsShape[0] - 2, lhsShape[0] - 2}; Type elementType
-        //        = FloatType::getF32(builder.getContext());
+        //        ArrayRef<int64_t> inShapes = {50, 50};
+        //        //{lhsShape[0],lhsShape[0]};
+        //        ArrayRef<int64_t> outShapes = {48, 46};
+        //        //{lhsShape[0] - 2, lhsShape[0] - 2};
+        //        Type elementType = FloatType::getF32(builder.getContext());
         //
         //        FuncOp riseFun = builder.create<FuncOp>(
         //            op.getLoc(), StringRef("rise_fun"),
@@ -510,24 +345,31 @@ struct DotOpConversion
         //            ArrayRef<NamedAttribute>{});
         //        Block *riseFunBlock = riseFun.addEntryBlock();
         //        builder.setInsertionPointToStart(riseFunBlock);
-
+        //
         /////////////////////// insert rise program here ///////////////////////
 
-        generateRiseMM(builder, op.getLoc(), lhsShape[0], lhsShape[1],
-                       rhsShape[1], inputBuffers[0], inputBuffers[1],
-                       resultBuffers[0]);
+        mlir::edsc::highlevel::matrix_multiplication(
+            lhsShape[0], lhsShape[1], rhsShape[1], inputBuffers[0],
+            inputBuffers[1], resultBuffers[0]);
+
+        //        generateRiseMM(builder, op.getLoc(), lhsShape[0], lhsShape[1],
+        //                       rhsShape[1], inputBuffers[0], inputBuffers[1],
+        //                       resultBuffers[0]);
 
         // Only to test generating expressions:
         //        generateStencil(builder, op.getLoc(), lhsShape[0],
         //        inputBuffers[0],
         //                        resultBuffers[0]);
 
+        //        generate2DStencil(builder, op.getLoc(), 50, inputBuffers[0],
+        //                          resultBuffers[0]);
+
         //        generate2DStencil(builder, op.getLoc(), 50,
         //                          riseFunBlock->getArgument(0),
         //                          riseFunBlock->getArgument(1));
 
         ////////////////////////////////////////////////////////////////////////
-
+        //
         //        builder.create<ReturnOp>(op.getLoc());
         //
         //        builder.setInsertionPointAfter(riseFun);
@@ -536,21 +378,23 @@ struct DotOpConversion
         //            FunctionType::get({}, {}, builder.getContext()),
         //            ArrayRef<NamedAttribute>{});
         //        builder.setInsertionPointToStart(testFun.addEntryBlock());
-
-        ///////////////////////// specify test here ////////////////////////////
-
+        //
+        //        ///////////////////////// specify test here
+        //        ////////////////////////////
+        //
         //        generateTest(builder, op.getLoc(), 2, inShapes, outShapes,
         //        riseFun);
-
-        //        generateTest(builder, op.getLoc(), 1, {32}, {64});
-        //                generateTest(builder, op.getLoc(), 5, {2, 5, 8, 11,
-        //                12},
-        //                             {2, 5, 8, 11, 12});
+        //
+        //        //        generateTest(builder, op.getLoc(), 1, {32}, {64});
+        //        //                generateTest(builder, op.getLoc(), 5, {2, 5,
+        //        8, 11,
+        //        //                12},
+        //        //                             {2, 5, 8, 11, 12});
         //        builder.create<ReturnOp>(op.getLoc());
-
+        //
         ////////////////////////////////////////////////////////////////////////
 
-        op.getParentOfType<FuncOp>().dump();
+        //        op.getParentOfType<FuncOp>().dump();
       }
       return success();
     }
@@ -562,6 +406,106 @@ struct DotOpConversion
 //===----------------------------------------------------------------------===//
 // xla_hlo.convolution conversion patterns and utility functions.
 //===----------------------------------------------------------------------===//
+
+namespace {
+/// Converts xla_hlo.convolution operation to linalg.conv op.
+struct RiseConvOpConversion
+    : public ConvertToLinalgBufferOp<RiseConvOpConversion, xla_hlo::ConvOp> {
+  using ConvertToLinalgBufferOp<RiseConvOpConversion,
+      xla_hlo::ConvOp>::ConvertToLinalgBufferOp;
+  LogicalResult apply(xla_hlo::ConvOp op, ArrayRef<Value> inputBuffers,
+                      ArrayRef<Value> resultBuffers,
+                      ConversionPatternRewriter &rewriter) const;
+};
+}  // namespace
+
+LogicalResult RiseConvOpConversion::apply(
+    xla_hlo::ConvOp op, ArrayRef<Value> inputBuffers,
+    ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
+  if (const auto dimensionNumbers = op.dimension_numbers()) {
+    const int inputSpatialRank =
+        llvm::size(dimensionNumbers.input_spatial_dimensions());
+    // The dimensions for input should follow the order of
+    // batch_count, spatial_dims..., input_feature_count.
+    if (dimensionNumbers.input_batch_dimension().getInt() != 0 ||
+        dimensionNumbers.input_feature_dimension().getInt() !=
+        (inputSpatialRank + 1))
+      return failure();
+
+    const int kernelSpatialRank =
+        llvm::size(dimensionNumbers.kernel_spatial_dimensions());
+    // The dimensions for filter should follow the order of
+    // spatial_dims..., input_feature_count, num_output_feature_count.
+    if (dimensionNumbers.kernel_input_feature_dimension().getInt() !=
+        kernelSpatialRank ||
+        dimensionNumbers.kernel_output_feature_dimension().getInt() !=
+        (kernelSpatialRank + 1))
+      return failure();
+
+    const int outputSpatialRank =
+        llvm::size(dimensionNumbers.output_spatial_dimensions());
+    // The dimensions for output should follow the order of
+    // batch_count, spatial_dims.., output_feature_count.
+    if (dimensionNumbers.output_batch_dimension().getInt() != 0 ||
+        dimensionNumbers.output_feature_dimension().getInt() !=
+        (outputSpatialRank + 1))
+      return failure();
+
+    if (inputSpatialRank != outputSpatialRank ||
+        inputSpatialRank != kernelSpatialRank)
+      return failure();
+
+    auto inputSpatialDim = dimensionNumbers.input_spatial_dimensions().begin();
+    auto kernelSpatialDim =
+        dimensionNumbers.kernel_spatial_dimensions().begin();
+    auto outputSpatialDim =
+        dimensionNumbers.output_spatial_dimensions().begin();
+    // Check spatial dims are ordred correctly.
+    for (int i = 0; i < inputSpatialRank; ++i) {
+      const int dim = i + 1;
+      if ((*inputSpatialDim++).getZExtValue() != dim ||
+          (*outputSpatialDim++).getZExtValue() != dim ||
+          (*kernelSpatialDim++).getZExtValue() != i)
+        return failure();
+    }
+  }
+
+  llvm::SmallVector<Attribute, 4> strides;
+  if (auto windowStrides = op.window_strides()) {
+    auto range = windowStrides->getAttributeValues();
+    strides.append(range.begin(), range.end());
+  }
+  auto stridesArg = ArrayAttr::get(strides, op.getContext());
+
+  // TODO(ataei): Only support dilated convolution for now. We need to consider
+  // LHS dilation for deconvolution cases.
+  llvm::SmallVector<Attribute, 4> dilation;
+  if (auto rhsDilation = op.rhs_dilation()) {
+    auto range = rhsDilation->getAttributeValues();
+    dilation.append(range.begin(), range.end());
+  }
+  auto dilationArg = ArrayAttr::get(dilation, op.getContext());
+
+  // Set padding only if it is non-zero.
+  DenseIntElementsAttr padding = op.paddingAttr();
+  if (!padding || !llvm::any_of(padding.getValues<APInt>(), [](APInt intVal) {
+    return !intVal.isNullValue();
+  })) {
+    padding = nullptr;
+  }
+
+  if (failed(zeroFillBuffer(op.getLoc(), resultBuffers[0], rewriter))) {
+    rewriter.notifyMatchFailure(op, "failed to zero fill result buffer");
+    return failure();
+  }
+
+  // here we will call mlir::edsc::highlevel::convolution
+
+  rewriter.create<linalg::ConvOp>(op.getLoc(), inputBuffers[1], inputBuffers[0],
+                                  resultBuffers[0], stridesArg, dilationArg,
+                                  padding);
+  return success();
+}
 
 namespace {
 /// Converts xla_hlo.convolution operation to linalg.conv op.
@@ -1514,14 +1458,13 @@ struct ConvertHLOToLinalgOnBuffersPass
 void populateHLOToLinalgOnBuffersConversionPatterns(
     MLIRContext *context, OwningRewritePatternList &patterns,
     TensorToBufferMap const &resultTensorToBufferMap) {
-  patterns
-      .insert<ConvOpConversion,
-              DotOpConversion<DotOperationType::MatrixMatrix, linalg::MatmulOp>,
-              LinalgOpOnTensorConversion<linalg::GenericOp>,
-              LinalgOpOnTensorConversion<linalg::IndexedGenericOp>,
-              PadOpConversion, ReduceOpConversion, ReduceWindowOpConversion,
-              TensorReshapeOpConversion, TorchIndexSelectOpConversion>(
-          context, resultTensorToBufferMap);
+  patterns.insert<
+      ConvOpConversion,
+      RiseDotOpConversion<DotOperationType::MatrixMatrix, linalg::MatmulOp>,
+      LinalgOpOnTensorConversion<linalg::GenericOp>,
+      LinalgOpOnTensorConversion<linalg::IndexedGenericOp>, PadOpConversion,
+      ReduceOpConversion, ReduceWindowOpConversion, TensorReshapeOpConversion,
+      TorchIndexSelectOpConversion>(context, resultTensorToBufferMap);
   // Reduce region operation conversions.
   patterns.insert<ReduceRegionXLAOpConversion<xla_hlo::AddOp>,
                   ReduceRegionXLAOpConversion<xla_hlo::MinOp>,
@@ -1532,6 +1475,8 @@ void populateHLOToLinalgOnBuffersConversionPatterns(
 void ConvertHLOToLinalgOnBuffersPass::runOnFunction() {
   MLIRContext *context = &getContext();
   FuncOp funcOp = getFunction();
+
+  funcOp.dump();
 
   // First create buffers for all StoreTensorOps.
   TensorToBufferMap resultTensorToBufferMap;
@@ -1567,6 +1512,7 @@ void ConvertHLOToLinalgOnBuffersPass::runOnFunction() {
         // The other Linalg ops (like linalg.yield) are okay.
         return true;
       }));
+  target.addLegalDialect<RiseDialect>();
   // Let the rest fall through.
   target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
 
