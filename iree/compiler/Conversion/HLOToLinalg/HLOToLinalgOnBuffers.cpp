@@ -361,15 +361,12 @@ struct RiseDotOpConversion
         //        inputBuffers[0],
         //                        resultBuffers[0]);
 
-        //        generate2DStencil(builder, op.getLoc(), 50, inputBuffers[0],
-        //                          resultBuffers[0]);
-
         //        generate2DStencil(builder, op.getLoc(), 50,
         //                          riseFunBlock->getArgument(0),
         //                          riseFunBlock->getArgument(1));
 
         ////////////////////////////////////////////////////////////////////////
-        //
+
         //        builder.create<ReturnOp>(op.getLoc());
         //
         //        builder.setInsertionPointAfter(riseFun);
@@ -378,18 +375,16 @@ struct RiseDotOpConversion
         //            FunctionType::get({}, {}, builder.getContext()),
         //            ArrayRef<NamedAttribute>{});
         //        builder.setInsertionPointToStart(testFun.addEntryBlock());
-        //
-        //        ///////////////////////// specify test here
-        //        ////////////////////////////
-        //
+
+        ///////////////////////// specify test here ////////////////////////////
+
         //        generateTest(builder, op.getLoc(), 2, inShapes, outShapes,
         //        riseFun);
-        //
-        //        //        generateTest(builder, op.getLoc(), 1, {32}, {64});
-        //        //                generateTest(builder, op.getLoc(), 5, {2, 5,
-        //        8, 11,
-        //        //                12},
-        //        //                             {2, 5, 8, 11, 12});
+
+        //        generateTest(builder, op.getLoc(), 1, {32}, {64});
+        //                generateTest(builder, op.getLoc(), 5, {2, 5, 8, 11,
+        //                12},
+        //                             {2, 5, 8, 11, 12});
         //        builder.create<ReturnOp>(op.getLoc());
         //
         ////////////////////////////////////////////////////////////////////////
@@ -1475,8 +1470,6 @@ void populateHLOToLinalgOnBuffersConversionPatterns(
 void ConvertHLOToLinalgOnBuffersPass::runOnFunction() {
   MLIRContext *context = &getContext();
   FuncOp funcOp = getFunction();
-
-  funcOp.dump();
 
   // First create buffers for all StoreTensorOps.
   TensorToBufferMap resultTensorToBufferMap;
