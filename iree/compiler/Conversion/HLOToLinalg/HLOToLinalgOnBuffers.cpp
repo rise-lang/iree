@@ -494,7 +494,17 @@ LogicalResult RiseConvOpConversion::apply(
     return failure();
   }
 
-  // here we will call mlir::edsc::highlevel::convolution
+  using namespace mlir::edsc::op;
+  using namespace mlir::edsc::type;
+  using namespace mlir::edsc::highlevel;
+
+
+
+//  Value input = in(inputBuffers[0], array2DType(128, 128, scalarF32Type()));
+//  Value kernel = in(inputBuffers[1], array2DType(3, 3, scalarF32Type()));
+//  Value conv = conv2D(input, kernel);
+//  out(resultBuffers[0], conv);
+
 
   rewriter.create<linalg::ConvOp>(op.getLoc(), inputBuffers[1], inputBuffers[0],
                                   resultBuffers[0], stridesArg, dilationArg,
@@ -1454,7 +1464,8 @@ void populateHLOToLinalgOnBuffersConversionPatterns(
     MLIRContext *context, OwningRewritePatternList &patterns,
     TensorToBufferMap const &resultTensorToBufferMap) {
   patterns.insert<
-      ConvOpConversion,
+//      ConvOpConversion,
+      RiseConvOpConversion,
       RiseDotOpConversion<DotOperationType::MatrixMatrix, linalg::MatmulOp>,
       LinalgOpOnTensorConversion<linalg::GenericOp>,
       LinalgOpOnTensorConversion<linalg::IndexedGenericOp>, PadOpConversion,
@@ -1486,7 +1497,9 @@ void ConvertHLOToLinalgOnBuffersPass::runOnFunction() {
 
   ConversionTarget target(*context);
   // Make sure all XLA HLO ops are converted to Linalg ops after this pass.
+
   target.addIllegalDialect<xla_hlo::XlaHloDialect>();
+
   // All Linalg ops should operate on buffers. So hal.interface.*.tensor ops
   // should be gone.
   target.addIllegalOp<IREE::HAL::InterfaceLoadTensorOp,
