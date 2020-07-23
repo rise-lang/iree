@@ -15,7 +15,9 @@
 #ifndef IREE_COMPILER_CONVERSION_LINALGTOSPIRV_PASSES_H_
 #define IREE_COMPILER_CONVERSION_LINALGTOSPIRV_PASSES_H_
 
+#include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/DialectConversion.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -48,6 +50,10 @@ std::unique_ptr<OperationPass<ModuleOp>> createConvertToSPIRVPass();
 /// synchronization within a single kernel.
 std::unique_ptr<OperationPass<ModuleOp>> createSplitDispatchFunctionPass();
 
+/// Pass to convert vector operations to GPU level operations. Instructions of
+/// vector size equal to subgroup size are distributed across the subgroup.
+std::unique_ptr<OperationPass<FuncOp>> createVectorToGPUPass();
+
 /// Populates passes needed to lower a XLA HLO op to SPIR-V dialect via the
 /// structured ops path. The pass manager `pm` in here operate on the module
 /// within the IREE::HAL::ExecutableOp. The `workGroupSize` can be used to
@@ -57,6 +63,9 @@ std::unique_ptr<OperationPass<ModuleOp>> createSplitDispatchFunctionPass();
 void buildSPIRVTransformPassPipeline(OpPassManager &pm,
                                      ArrayRef<int64_t> workGroupSize);
 
+/// Poplate passes needed to lower loop.parallel to workgroups.
+void populateParallelLoopToWorkgroupPatterns(
+    MLIRContext *context, OwningRewritePatternList &patterns);
 }  // namespace iree_compiler
 }  // namespace mlir
 

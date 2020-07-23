@@ -18,11 +18,11 @@
 
 namespace iree {
 namespace hal {
+namespace host {
 
 InProcCommandBuffer::InProcCommandBuffer(
-    Allocator* allocator, CommandBufferModeBitfield mode,
-    CommandCategoryBitfield command_categories)
-    : CommandBuffer(allocator, mode, command_categories) {}
+    CommandBufferModeBitfield mode, CommandCategoryBitfield command_categories)
+    : CommandBuffer(mode, command_categories) {}
 
 InProcCommandBuffer::~InProcCommandBuffer() { Reset(); }
 
@@ -244,6 +244,7 @@ Status InProcCommandBuffer::Process(CommandBuffer* command_processor) const {
       LOG(ERROR) << "DeviceQueue failure while executing command; permanently "
                     "failing all future commands: "
                  << command_status;
+      return command_status;
     }
   }
 
@@ -331,5 +332,6 @@ Status InProcCommandBuffer::ProcessCmd(CmdHeader* cmd_header,
   }
 }
 
+}  // namespace host
 }  // namespace hal
 }  // namespace iree

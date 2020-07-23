@@ -170,6 +170,7 @@ class CheckTest : public ::testing::Test {
             &function),
         IREE_LOC))
         << "Exported function '" << function_name << "' not found";
+    // TODO(#2075): don't directly invoke native functions like this.
     return FromApiStatus(
         iree_vm_invoke(context_, function,
                        /*policy=*/nullptr, inputs_,
@@ -220,28 +221,28 @@ iree_vm_module_t* CheckTest::check_module_ = nullptr;
 iree_vm_module_t* CheckTest::hal_module_ = nullptr;
 
 TEST_F(CheckTest, ExpectTrueSuccess) {
-  ASSERT_OK(Invoke("expect_true", {IREE_VM_VALUE_MAKE_I32(1)}));
+  ASSERT_OK(Invoke("expect_true", {iree_vm_value_make_i32(1)}));
 }
 
 TEST_F(CheckTest, ExpectTrueFailure) {
   EXPECT_NONFATAL_FAILURE(
-      ASSERT_OK(Invoke("expect_true", {IREE_VM_VALUE_MAKE_I32(0)})),
+      ASSERT_OK(Invoke("expect_true", {iree_vm_value_make_i32(0)})),
       "Expected 0 to be nonzero");
 }
 
 TEST_F(CheckTest, ExpectFalseSuccess) {
-  ASSERT_OK(Invoke("expect_false", {IREE_VM_VALUE_MAKE_I32(0)}));
+  ASSERT_OK(Invoke("expect_false", {iree_vm_value_make_i32(0)}));
 }
 
 TEST_F(CheckTest, ExpectFalseFailure) {
   EXPECT_NONFATAL_FAILURE(
-      ASSERT_OK(Invoke("expect_false", {IREE_VM_VALUE_MAKE_I32(1)})),
+      ASSERT_OK(Invoke("expect_false", {iree_vm_value_make_i32(1)})),
       "Expected 1 to be zero");
 }
 
 TEST_F(CheckTest, ExpectFalseNotOneFailure) {
   EXPECT_NONFATAL_FAILURE(
-      ASSERT_OK(Invoke("expect_false", {IREE_VM_VALUE_MAKE_I32(42)})),
+      ASSERT_OK(Invoke("expect_false", {iree_vm_value_make_i32(42)})),
       "Expected 42 to be zero");
 }
 

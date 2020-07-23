@@ -20,7 +20,7 @@
 #include "iree/compiler/Dialect/Shape/Transforms/Passes.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
-#include "tensorflow/compiler/mlir/xla/transforms/passes.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/transforms/passes.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -33,7 +33,7 @@ void buildVMLATransformPassPipeline(OpPassManager &passManager) {
   // ---------------------------------------------------------------------------
   // Inline and flatten structured control flow to our CFG.
   // ---------------------------------------------------------------------------
-  passManager.addNestedPass<FuncOp>(xla_hlo::createLegalizeControlFlowPass());
+  passManager.addNestedPass<FuncOp>(mhlo::createLegalizeControlFlowPass());
 
   // Perform inlining and cleanup after CFG manipulation.
   passManager.addPass(createInlinerPass());

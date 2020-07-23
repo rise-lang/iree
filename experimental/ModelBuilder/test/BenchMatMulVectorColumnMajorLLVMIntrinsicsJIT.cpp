@@ -105,7 +105,7 @@ void BM_MxMColMajorVectors(benchmark::State &state) {
 
   vector::VectorTransformsOptions vectorTransformsOptions{
       LowerToLLVMMatrixIntrinsics ? vector::VectorContractLowering::Matmul
-                                  : vector::VectorContractLowering::FMA};
+                                  : vector::VectorContractLowering::Dot};
   CompilationOptions compilationOptions{/*llvmOptLevel=*/3, /*llcOptLevel=*/3,
                                         vectorTransformsOptions};
   if (MeasureBuild) {
@@ -136,6 +136,13 @@ void BM_MxMColMajorVectors(benchmark::State &state) {
       if (err_run) llvm_unreachable("Error running function.");
     }
   }
+}
+
+int main(int argc, char **argv) {
+  mlir::ModelBuilder::registerAllDialects();
+  ::benchmark::Initialize(&argc, argv);
+  if (::benchmark::ReportUnrecognizedArguments(argc, argv)) return 1;
+  ::benchmark::RunSpecifiedBenchmarks();
 }
 
 //

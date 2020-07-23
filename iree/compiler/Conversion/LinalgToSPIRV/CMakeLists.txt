@@ -19,39 +19,48 @@ iree_cc_library(
     LinalgToSPIRV
   HDRS
     "Attributes.h"
+    "CooperativeMatrixAnalysis.h"
+    "MarkerUtils.h"
     "MemorySpace.h"
     "Passes.h"
+    "Utils.h"
   SRCS
     "ConvertToGPUPass.cpp"
     "ConvertToSPIRVPass.cpp"
+    "CooperativeMatrixAnalysis.cpp"
     "LinalgTileAndFusePass.cpp"
+    "MarkerUtils.cpp"
     "Passes.cpp"
     "SplitDispatchFunctionPass.cpp"
+    "Utils.cpp"
+    "VectorToGPUPass.cpp"
   DEPS
     LLVMSupport
     MLIRAffineOps
     MLIRAffineToStandard
-    MLIREDSC
+    MLIRAnalysis
     MLIRGPU
-    MLIRGPUtoSPIRVTransforms
+    MLIRGPUToSPIRVTransforms
     MLIRIR
     MLIRLinalgOps
     MLIRLinalgTransforms
     MLIRPass
     MLIRSCF
     MLIRSCFToGPU
+    MLIRSCFToSPIRV
     MLIRSPIRV
     MLIRSPIRVTransforms
     MLIRStandardOps
     MLIRStandardToSPIRVTransforms
     MLIRSupport
     MLIRTransforms
+    MLIRVector
     iree::compiler::Conversion::CodegenUtils
     iree::compiler::Conversion::HLOToLinalg
     iree::compiler::Dialect::HAL::IR
     iree::compiler::Dialect::IREE::IR
     iree::compiler::Dialect::Shape::IR
     iree::compiler::Dialect::Shape::Transforms
-    tensorflow::mlir_xla
+    tensorflow::mlir_hlo
   PUBLIC
 )

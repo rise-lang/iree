@@ -25,6 +25,8 @@ iree_cc_library(
     iree::base::status
     iree::base::status_matchers
     iree::hal::driver_registry
+    iree::hal::dylib::dylib_driver_module
+    iree::hal::llvmjit::llvmjit_driver_module
     iree::hal::vmla::vmla_driver_module
     iree::hal::vulkan::vulkan_driver_module
     iree::testing::gtest_main
@@ -60,9 +62,33 @@ iree_cc_test(
 
 iree_cc_test(
   NAME
+    command_queue_test
+  SRCS
+    "command_queue_test.cc"
+  DEPS
+    ::cts_test_base
+    iree::base::status
+    iree::base::status_matchers
+    iree::hal::driver_registry
+    iree::testing::gtest
+)
+
+iree_cc_test(
+  NAME
     device_creation_test
   SRCS
     "device_creation_test.cc"
+  DEPS
+    ::cts_test_base
+    iree::hal::driver_registry
+    iree::testing::gtest
+)
+
+iree_cc_test(
+  NAME
+    semaphore_test
+  SRCS
+    "semaphore_test.cc"
   DEPS
     ::cts_test_base
     iree::hal::driver_registry

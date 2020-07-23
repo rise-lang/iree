@@ -14,6 +14,7 @@
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -34,7 +35,7 @@ cc_library(
         "//iree/compiler/Dialect/VMLA/Transforms",
         "//iree/schemas:vmla_executable_def_cc_fbs",
         "@com_github_google_flatbuffers//:flatbuffers",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",

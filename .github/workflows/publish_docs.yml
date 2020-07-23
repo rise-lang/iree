@@ -17,7 +17,7 @@ name: Publish Documentation
 on:
   push:
     branches:
-      - master
+      - main
 
 jobs:
   linux:
@@ -25,6 +25,10 @@ jobs:
     env:
       IREE_DOC_BUILD_DIR: build-docs
     steps:
+      - name: Setup Bazel
+        uses: abhinavsingh/setup-bazel@v3
+        with:
+          version: 3.3.1
       - name: Checking out repository
         uses: actions/checkout@v2
         with:

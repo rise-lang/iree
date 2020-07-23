@@ -11,7 +11,7 @@ module {
     // CHECK-SAME: padding = dense<[
     // CHECK-SAME:                  [0, 1], [0, 1]]> : tensor<2x2xi64>
     // CHECK-SAME: strides = [2, 1]}
-    %2 = "xla_hlo.convolution"(%1, %0) {
+    %2 = "mhlo.convolution"(%1, %0) {
       batch_group_count = 1 : i64,
       dimension_numbers = {
         input_batch_dimension = 0 : i64,
@@ -37,3 +37,4 @@ module {
     hal.interface.binding @ret0, set=0, binding=2, type="StorageBuffer", access="Write"
   }
 }
+//linalg.conv(%1, %2, %0) {dilations = [1, 2], padding = dense<[[0, 1], [0, 1]]> : tensor<2x2xi64>, strides = [2, 1]} : memref<3x5x5x3xf32>, memref<2x2x3x4xf32>, memref<3x5x5x4xf32>

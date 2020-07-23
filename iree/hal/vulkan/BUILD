@@ -18,6 +18,7 @@ load("//iree:build_defs.oss.bzl", "PLATFORM_VULKAN_TEST_DEPS")
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -91,6 +92,7 @@ cc_library(
         ":pipeline_executable",
         ":status_util",
         ":vma_allocator",
+        "//iree/base:alignment",
         "//iree/base:arena",
         "//iree/base:math",
         "//iree/base:status",
@@ -175,16 +177,35 @@ cc_library(
 cc_test(
     name = "dynamic_symbols_test",
     srcs = ["dynamic_symbols_test.cc"],
-    # TODO(b/145815906) Get this running in OSS CI.
-    tags = [
-        "noga",
-        "nokokoro",
-    ],
+    tags = ["driver=vulkan"],
     deps = [
         ":status_util",
         ":dynamic_symbols",
         "//iree/base:status_matchers",
     ] + PLATFORM_VULKAN_TEST_DEPS,
+)
+
+cc_library(
+    name = "emulated_timeline_semaphore",
+    srcs = ["emulated_timeline_semaphore.cc"],
+    hdrs = ["emulated_timeline_semaphore.h"],
+    deps = [
+        ":dynamic_symbols",
+        ":handle_util",
+        ":status_util",
+        ":timepoint_util",
+        "//iree/base:intrusive_list",
+        "//iree/base:ref_ptr",
+        "//iree/base:status",
+        "//iree/base:tracing",
+        "//iree/hal:semaphore",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/utility",
+        "@iree_vulkan_headers//:vulkan_headers_no_prototypes",
+    ],
 )
 
 cc_library(
@@ -327,11 +348,59 @@ cc_library(
 )
 
 cc_library(
+    name = "serializing_command_queue",
+    srcs = ["serializing_command_queue.cc"],
+    hdrs = ["serializing_command_queue.h"],
+    deps = [
+        ":direct_command_buffer",
+        ":dynamic_symbols",
+        ":emulated_timeline_semaphore",
+        ":handle_util",
+        ":status_util",
+        ":timepoint_util",
+        "//iree/base:intrusive_list",
+        "//iree/base:memory",
+        "//iree/base:ref_ptr",
+        "//iree/base:source_location",
+        "//iree/base:status",
+        "//iree/base:tracing",
+        "//iree/hal:command_buffer",
+        "//iree/hal:command_queue",
+        "//iree/hal:semaphore",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
     name = "status_util",
     srcs = ["status_util.cc"],
     hdrs = ["status_util.h"],
     deps = [
         "//iree/base:status",
+        "@iree_vulkan_headers//:vulkan_headers_no_prototypes",
+    ],
+)
+
+cc_library(
+    name = "timepoint_util",
+    srcs = ["timepoint_util.cc"],
+    hdrs = ["timepoint_util.h"],
+    deps = [
+        ":dynamic_symbols",
+        ":handle_util",
+        ":status_util",
+        "//iree/base:intrusive_list",
+        "//iree/base:ref_ptr",
+        "//iree/base:status",
+        "//iree/base:tracing",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/time",
+        "@com_google_absl//absl/utility",
         "@iree_vulkan_headers//:vulkan_headers_no_prototypes",
     ],
 )
@@ -385,6 +454,7 @@ cc_library(
         ":direct_command_buffer",
         ":direct_command_queue",
         ":dynamic_symbols",
+        ":emulated_timeline_semaphore",
         ":extensibility_util",
         ":handle_util",
         ":native_descriptor_set",
@@ -392,6 +462,7 @@ cc_library(
         ":native_timeline_semaphore",
         ":pipeline_cache",
         ":pipeline_executable_layout",
+        ":serializing_command_queue",
         ":status_util",
         ":vma_allocator",
         "//iree/base:math",
@@ -406,6 +477,7 @@ cc_library(
         "//iree/hal:driver",
         "//iree/hal:semaphore",
         "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/flags:flag",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/synchronization",

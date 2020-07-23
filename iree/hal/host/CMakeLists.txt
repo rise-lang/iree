@@ -16,38 +16,32 @@ iree_add_all_subdirs()
 
 iree_cc_library(
   NAME
-    async_command_queue
+    condvar_semaphore
   HDRS
-    "async_command_queue.h"
+    "condvar_semaphore.h"
   SRCS
-    "async_command_queue.cc"
+    "condvar_semaphore.cc"
   DEPS
-    ::host_submission_queue
     absl::core_headers
+    absl::inlined_vector
+    absl::span
     absl::synchronization
     iree::base::status
     iree::base::tracing
-    iree::hal::command_queue
     iree::hal::semaphore
   PUBLIC
 )
 
 iree_cc_test(
   NAME
-    async_command_queue_test
+    condvar_semaphore_test
   SRCS
-    "async_command_queue_test.cc"
+    "condvar_semaphore_test.cc"
   DEPS
-    ::async_command_queue
-    ::host_submission_queue
-    absl::memory
+    ::condvar_semaphore
     absl::time
     iree::base::status
     iree::base::status_matchers
-    iree::base::time
-    iree::hal::command_queue
-    iree::hal::testing::mock_command_buffer
-    iree::hal::testing::mock_command_queue
     iree::testing::gtest_main
 )
 
@@ -82,13 +76,13 @@ iree_cc_library(
 
 iree_cc_library(
   NAME
-    host_event
+    host_executable
   HDRS
-    "host_event.h"
-  SRCS
-    "host_event.cc"
+    "host_executable.h"
   DEPS
-    iree::hal::event
+    iree::base::status
+    iree::hal::descriptor_set
+    iree::hal::executable
   PUBLIC
 )
 
@@ -126,80 +120,26 @@ iree_cc_library(
 
 iree_cc_library(
   NAME
-    host_local_command_processor
+    host_local_device
   HDRS
-    "host_local_command_processor.h"
+    "host_local_device.h"
   SRCS
-    "host_local_command_processor.cc"
+    "host_local_device.cc"
   DEPS
     ::host_descriptor_set
     ::host_executable_layout
-    absl::inlined_vector
-    iree::base::source_location
-    iree::base::status
-    iree::base::tracing
-    iree::hal::command_buffer
-  PUBLIC
-)
-
-iree_cc_library(
-  NAME
-    host_semaphore
-  HDRS
-    "host_semaphore.h"
-  SRCS
-    "host_semaphore.cc"
-  DEPS
+    ::host_local_allocator
+    ::scheduling_model
     absl::core_headers
-    absl::inlined_vector
+    absl::memory
     absl::span
-    absl::synchronization
+    iree::base::memory
     iree::base::status
     iree::base::tracing
-    iree::hal::semaphore
+    iree::hal::allocator
+    iree::hal::command_buffer_validation
+    iree::hal::device
   PUBLIC
-)
-
-iree_cc_test(
-  NAME
-    host_semaphore_test
-  SRCS
-    "host_semaphore_test.cc"
-  DEPS
-    ::host_semaphore
-    absl::time
-    iree::base::status
-    iree::base::status_matchers
-    iree::testing::gtest_main
-)
-
-iree_cc_library(
-  NAME
-    host_submission_queue
-  HDRS
-    "host_submission_queue.h"
-  SRCS
-    "host_submission_queue.cc"
-  DEPS
-    ::host_semaphore
-    absl::core_headers
-    absl::inlined_vector
-    absl::synchronization
-    iree::base::intrusive_list
-    iree::base::status
-    iree::base::tracing
-    iree::hal::command_queue
-  PUBLIC
-)
-
-iree_cc_test(
-  NAME
-    host_submission_queue_test
-  SRCS
-    "host_submission_queue_test.cc"
-  DEPS
-    ::host_submission_queue
-    iree::testing::gtest_main
 )
 
 iree_cc_library(
@@ -215,5 +155,27 @@ iree_cc_library(
     iree::base::status
     iree::base::tracing
     iree::hal::command_buffer
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
+    nop_event
+  HDRS
+    "nop_event.h"
+  SRCS
+    "nop_event.cc"
+  DEPS
+    iree::hal::event
+  PUBLIC
+)
+
+iree_cc_library(
+  NAME
+    scheduling_model
+  HDRS
+    "scheduling_model.h"
+  DEPS
+    iree::hal::command_queue
   PUBLIC
 )

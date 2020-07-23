@@ -19,6 +19,7 @@ load(
     "PYBIND_EXTENSION_COPTS",
     "PYBIND_FEATURES",
     "PYBIND_REGISTER_MLIR_PASSES",
+    "PYTHON_CPP_EXTRA_DEPS",
     "iree_py_extension",
     "iree_py_library",
     "iree_py_test",
@@ -27,6 +28,7 @@ load(
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -54,7 +56,7 @@ iree_py_library(
         "__init__.py",
     ],
     srcs_version = "PY3",
-    deps = [
+    deps = PYTHON_CPP_EXTRA_DEPS + [
         ":binding",
         "//bindings/python:pathsetup",  # build_cleaner: keep
     ],
@@ -89,8 +91,9 @@ pybind_cc_library(
         "//iree/tools:init_compiler_modules",
         "//iree/tools:init_iree_passes_and_dialects",
         "//iree/tools:init_mlir_passes_and_dialects",
+        "//iree/base:localfile",
         "//iree/tools:init_targets",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:AllPassesAndDialectsNoRegistration",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:SCFTransforms",

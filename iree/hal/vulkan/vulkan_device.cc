@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "absl/container/inlined_vector.h"
+#include "absl/flags/flag.h"
 #include "absl/memory/memory.h"
 #include "absl/strings/str_cat.h"
 #include "absl/synchronization/mutex.h"
@@ -30,14 +31,19 @@
 #include "iree/hal/vulkan/direct_command_buffer.h"
 #include "iree/hal/vulkan/direct_command_queue.h"
 #include "iree/hal/vulkan/dynamic_symbols.h"
+#include "iree/hal/vulkan/emulated_timeline_semaphore.h"
 #include "iree/hal/vulkan/extensibility_util.h"
 #include "iree/hal/vulkan/native_descriptor_set.h"
 #include "iree/hal/vulkan/native_event.h"
 #include "iree/hal/vulkan/native_timeline_semaphore.h"
 #include "iree/hal/vulkan/pipeline_cache.h"
 #include "iree/hal/vulkan/pipeline_executable_layout.h"
+#include "iree/hal/vulkan/serializing_command_queue.h"
 #include "iree/hal/vulkan/status_util.h"
 #include "iree/hal/vulkan/vma_allocator.h"
+
+ABSL_FLAG(bool, vulkan_force_timeline_semaphore_emulation, false,
+          "Uses timeline semaphore emulation even if native support exists.");
 
 namespace iree {
 namespace hal {
@@ -164,6 +170,7 @@ absl::InlinedVector<std::unique_ptr<CommandQueue>, 4> CreateCommandQueues(
     const DeviceInfo& device_info,
     const ref_ptr<VkDeviceHandle>& logical_device,
     const QueueSet& compute_queue_set, const QueueSet& transfer_queue_set,
+    const ref_ptr<TimePointFencePool>& fence_pool,
     const ref_ptr<DynamicSymbols>& syms) {
   absl::InlinedVector<std::unique_ptr<CommandQueue>, 4> command_queues;
 
@@ -175,10 +182,18 @@ absl::InlinedVector<std::unique_ptr<CommandQueue>, 4> CreateCommandQueues(
     syms->vkGetDeviceQueue(*logical_device,
                            compute_queue_set.queue_family_index, i, &queue);
     std::string queue_name = absl::StrCat(device_info.name(), ":d", i);
-    command_queues.push_back(absl::make_unique<DirectCommandQueue>(
-        std::move(queue_name),
-        CommandCategory::kDispatch | CommandCategory::kTransfer, logical_device,
-        queue));
+
+    if (fence_pool != nullptr) {
+      command_queues.push_back(absl::make_unique<SerializingCommandQueue>(
+          std::move(queue_name),
+          CommandCategory::kDispatch | CommandCategory::kTransfer,
+          logical_device, fence_pool, queue));
+    } else {
+      command_queues.push_back(absl::make_unique<DirectCommandQueue>(
+          std::move(queue_name),
+          CommandCategory::kDispatch | CommandCategory::kTransfer,
+          logical_device, queue));
+    }
   }
 
   uint64_t transfer_queue_count = CountOnes64(transfer_queue_set.queue_indices);
@@ -189,9 +204,15 @@ absl::InlinedVector<std::unique_ptr<CommandQueue>, 4> CreateCommandQueues(
     syms->vkGetDeviceQueue(*logical_device,
                            transfer_queue_set.queue_family_index, i, &queue);
     std::string queue_name = absl::StrCat(device_info.name(), ":t", i);
-    command_queues.push_back(absl::make_unique<DirectCommandQueue>(
-        std::move(queue_name), CommandCategory::kTransfer, logical_device,
-        queue));
+    if (fence_pool != nullptr) {
+      command_queues.push_back(absl::make_unique<SerializingCommandQueue>(
+          std::move(queue_name), CommandCategory::kTransfer, logical_device,
+          fence_pool, queue));
+    } else {
+      command_queues.push_back(absl::make_unique<DirectCommandQueue>(
+          std::move(queue_name), CommandCategory::kTransfer, logical_device,
+          queue));
+    }
   }
 
   return command_queues;
@@ -354,14 +375,28 @@ StatusOr<ref_ptr<VulkanDevice>> VulkanDevice::Create(
   for (uint32_t i = 0; i < queue_family_info.transfer_queue_count; ++i) {
     transfer_queue_set.queue_indices |= 1 << (i + base_queue_index);
   }
-  auto command_queues = CreateCommandQueues(
-      device_info, logical_device, compute_queue_set, transfer_queue_set, syms);
+
+  // Emulate timeline semaphores if associated functions are not defined.
+  ref_ptr<TimePointSemaphorePool> semaphore_pool = nullptr;
+  ref_ptr<TimePointFencePool> fence_pool = nullptr;
+  if (syms->vkGetSemaphoreCounterValue == nullptr ||
+      absl::GetFlag(FLAGS_vulkan_force_timeline_semaphore_emulation)) {
+    ASSIGN_OR_RETURN(semaphore_pool,
+                     TimePointSemaphorePool::Create(add_ref(logical_device)));
+    ASSIGN_OR_RETURN(fence_pool,
+                     TimePointFencePool::Create(add_ref(logical_device)));
+  }
+
+  auto command_queues =
+      CreateCommandQueues(device_info, logical_device, compute_queue_set,
+                          transfer_queue_set, fence_pool, syms);
 
   return assign_ref(new VulkanDevice(
       std::move(driver), device_info, physical_device,
       std::move(logical_device), std::move(allocator),
       std::move(command_queues), std::move(dispatch_command_pool),
-      std::move(transfer_command_pool), debug_capture_manager));
+      std::move(transfer_command_pool), std::move(semaphore_pool),
+      std::move(fence_pool), debug_capture_manager));
 }
 
 // static
@@ -421,13 +456,26 @@ StatusOr<ref_ptr<VulkanDevice>> VulkanDevice::Wrap(
                          device_handle, transfer_queue_set.queue_family_index));
   }
 
-  auto command_queues = CreateCommandQueues(
-      device_info, device_handle, compute_queue_set, transfer_queue_set, syms);
+  // Emulate timeline semaphores if associated functions are not defined.
+  ref_ptr<TimePointSemaphorePool> semaphore_pool = nullptr;
+  ref_ptr<TimePointFencePool> fence_pool = nullptr;
+  if (syms->vkGetSemaphoreCounterValue == nullptr ||
+      absl::GetFlag(FLAGS_vulkan_force_timeline_semaphore_emulation)) {
+    ASSIGN_OR_RETURN(semaphore_pool,
+                     TimePointSemaphorePool::Create(add_ref(device_handle)));
+    ASSIGN_OR_RETURN(fence_pool,
+                     TimePointFencePool::Create(add_ref(device_handle)));
+  }
+
+  auto command_queues =
+      CreateCommandQueues(device_info, device_handle, compute_queue_set,
+                          transfer_queue_set, fence_pool, syms);
 
   return assign_ref(new VulkanDevice(
       std::move(driver), device_info, physical_device, std::move(device_handle),
       std::move(allocator), std::move(command_queues),
       std::move(dispatch_command_pool), std::move(transfer_command_pool),
+      std::move(semaphore_pool), std::move(fence_pool),
       /*debug_capture_manager=*/nullptr));
 }
 
@@ -438,6 +486,8 @@ VulkanDevice::VulkanDevice(
     absl::InlinedVector<std::unique_ptr<CommandQueue>, 4> command_queues,
     ref_ptr<VkCommandPoolHandle> dispatch_command_pool,
     ref_ptr<VkCommandPoolHandle> transfer_command_pool,
+    ref_ptr<TimePointSemaphorePool> semaphore_pool,
+    ref_ptr<TimePointFencePool> fence_pool,
     DebugCaptureManager* debug_capture_manager)
     : Device(device_info),
       driver_(std::move(driver)),
@@ -449,6 +499,8 @@ VulkanDevice::VulkanDevice(
           make_ref<DescriptorPoolCache>(add_ref(logical_device_))),
       dispatch_command_pool_(std::move(dispatch_command_pool)),
       transfer_command_pool_(std::move(transfer_command_pool)),
+      semaphore_pool_(std::move(semaphore_pool)),
+      fence_pool_(std::move(fence_pool)),
       debug_capture_manager_(debug_capture_manager) {
   // Populate the queue lists based on queue capabilities.
   for (auto& command_queue : command_queues_) {
@@ -626,9 +678,9 @@ StatusOr<ref_ptr<CommandBuffer>> VulkanDevice::CreateCommandBuffer(
 
   // TODO(b/140026716): conditionally enable validation.
   auto impl = make_ref<DirectCommandBuffer>(
-      allocator(), mode, command_categories, add_ref(descriptor_pool_cache_),
+      mode, command_categories, add_ref(descriptor_pool_cache_),
       add_ref(command_pool), command_buffer);
-  return WrapCommandBufferWithValidation(std::move(impl));
+  return WrapCommandBufferWithValidation(allocator(), std::move(impl));
 }
 
 StatusOr<ref_ptr<Event>> VulkanDevice::CreateEvent() {
@@ -650,6 +702,35 @@ StatusOr<ref_ptr<Event>> VulkanDevice::CreateEvent() {
 StatusOr<ref_ptr<Semaphore>> VulkanDevice::CreateSemaphore(
     uint64_t initial_value) {
   IREE_TRACE_SCOPE0("VulkanDevice::CreateSemaphore");
+
+  if (emulating_timeline_semaphores()) {
+    return EmulatedTimelineSemaphore::Create(
+        add_ref(logical_device_),
+        // Triggers necessary processing on all queues due to new values gotten
+        // signaled for the given timeline |semaphore|.
+        // Different clang-format versions disagree about asterisk placement.
+        // clang-format off
+        [this](Semaphore* /*semaphore*/) -> Status {
+          // clang-format on
+          IREE_TRACE_SCOPE0("<lambda>::OnSemaphoreSignal");
+          for (const auto& queue : command_queues_) {
+            RETURN_IF_ERROR(static_cast<SerializingCommandQueue*>(queue.get())
+                                ->AdvanceQueueSubmission());
+          }
+          return OkStatus();
+        },
+        // Triggers necessary processing on all queues due to failures for the
+        // given timeline |semaphore|.
+        [this](Semaphore* /*semaphore*/) {
+          IREE_TRACE_SCOPE0("<lambda>::OnSemaphoreFailure");
+          for (const auto& queue : command_queues_) {
+            static_cast<SerializingCommandQueue*>(queue.get())
+                ->AbortQueueSubmission();
+          }
+        },
+        add_ref(semaphore_pool_), initial_value);
+  }
+
   return NativeTimelineSemaphore::Create(add_ref(logical_device_),
                                          initial_value);
 }
@@ -671,6 +752,22 @@ Status VulkanDevice::WaitSemaphores(absl::Span<const SemaphoreValue> semaphores,
                                     absl::Time deadline,
                                     VkSemaphoreWaitFlags wait_flags) {
   IREE_TRACE_SCOPE0("VulkanDevice::WaitSemaphores");
+
+  if (emulating_timeline_semaphores()) {
+    // TODO(antiagainst): We actually should get the fences associated with the
+    // emulated timeline semaphores so that we can wait them in a bunch. This
+    // implementation is problematic if we wait to wait any and we have the
+    // first semaphore taking extra long time but the following ones signal
+    // quickly.
+    for (int i = 0; i < semaphores.size(); ++i) {
+      auto* semaphore =
+          static_cast<EmulatedTimelineSemaphore*>(semaphores[i].semaphore);
+      RETURN_IF_ERROR(semaphore->Wait(semaphores[i].value, deadline));
+      if (wait_flags & VK_SEMAPHORE_WAIT_ANY_BIT) return OkStatus();
+    }
+
+    return OkStatus();
+  }
 
   absl::InlinedVector<VkSemaphore, 4> semaphore_handles(semaphores.size());
   absl::InlinedVector<uint64_t, 4> semaphore_values(semaphores.size());

@@ -94,9 +94,7 @@ using edsc::intrinsics::affine_max;
 using edsc::intrinsics::affine_min;
 using edsc::intrinsics::AffineIndexedValue;
 // From the Loop Dialect.
-using edsc::AffineLoopNestBuilder;
 using edsc::loopNestBuilder;
-using edsc::ParallelLoopNestBuilder;
 // -----------------------------------------------------------------------------
 
 // Helper class to simplify MLIR function construction by adding proper
@@ -135,6 +133,9 @@ class ModelBuilder : public OpBuilder {
   // Create a ModelBuilder and sets up an owned MLIRContext, ModuleOp and
   // SymbolTable as well as uniqued MLIR types.
   ModelBuilder();
+
+  // Register all the dialects used by ModelBuilder.
+  static void registerAllDialects();
 
   // Return a reference to the underlying module.
   OwningModuleRef &getModuleRef() { return module; }

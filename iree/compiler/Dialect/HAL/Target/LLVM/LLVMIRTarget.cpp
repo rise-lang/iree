@@ -74,8 +74,8 @@ class LLVMIRTargetBackend final : public TargetBackend {
                          options_.targetTriple);
       return failure();
     }
-    if (failed(runLLVMIRPasses(options_, std::move(targetMachine),
-                               llvmModule.get()))) {
+    if (failed(
+            runLLVMIRPasses(options_, targetMachine.get(), llvmModule.get()))) {
       return targetOp.emitError(
           "Can't build LLVMIR opt passes for ExecutableOp module");
     }
@@ -105,6 +105,15 @@ class LLVMIRTargetBackend final : public TargetBackend {
         std::move(bytes));
 
     return success();
+  }
+
+  std::array<Value, 3> calculateDispatchWorkgroupCount(
+      Location loc, IREE::HAL::ExecutableOp executableOp,
+      IREE::HAL::ExecutableEntryPointOp entryPointOp, Value workload,
+      OpBuilder& builder) override {
+    // For now we are not tiling and just dispatch everything as 1,1,1.
+    auto constantOne = builder.createOrFold<mlir::ConstantIndexOp>(loc, 1);
+    return {constantOne, constantOne, constantOne};
   }
 
  private:

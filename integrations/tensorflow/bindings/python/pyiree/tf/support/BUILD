@@ -16,10 +16,12 @@ load(
     "//bindings/python:build_defs.oss.bzl",
     "INTREE_TENSORFLOW_PY_DEPS",
     "iree_py_library",
+    "iree_py_test",
 )
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -29,9 +31,39 @@ iree_py_library(
         "__init__.py",
         "tf_test_driver.py",
         "tf_test_utils.py",
+        "tf_utils.py",
     ],
     deps = INTREE_TENSORFLOW_PY_DEPS + [
+        "//integrations/tensorflow/bindings/python:pathsetup",  # build_cleaner: keep
         "//integrations/tensorflow/bindings/python/pyiree/tf/compiler",
         "//bindings/python/pyiree/rt",
+    ],
+)
+
+iree_py_test(
+    name = "tf_test_utils_test",
+    srcs = [
+        "tf_test_utils.py",
+        "tf_test_utils_test.py",
+    ],
+    python_version = "PY3",
+    deps = INTREE_TENSORFLOW_PY_DEPS + [
+        "//integrations/tensorflow/bindings/python/pyiree/tf/support",
+    ],
+)
+
+iree_py_test(
+    name = "tf_utils_test",
+    srcs = [
+        "tf_utils.py",
+        "tf_utils_test.py",
+    ],
+    python_version = "PY3",
+    tags = [
+        "driver=llvm",
+        "driver=vmla",
+    ],
+    deps = INTREE_TENSORFLOW_PY_DEPS + [
+        "//integrations/tensorflow/bindings/python/pyiree/tf/support",
     ],
 )

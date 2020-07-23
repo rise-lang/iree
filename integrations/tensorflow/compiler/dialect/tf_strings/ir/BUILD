@@ -16,6 +16,7 @@ load("//build_tools/bazel:tblgen.bzl", "gentbl")
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -73,7 +74,7 @@ cc_library(
         ":ops_gen",
         "//integrations/tensorflow/compiler/dialect/tf_strings/conversion:convert_flow_to_hal",
         "//integrations/tensorflow/compiler/dialect/tf_strings/ir:ops",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
     ],
     alwayslink = 1,
@@ -93,7 +94,7 @@ cc_library(
     deps = [
         ":op_interface_gen",
         ":ops_gen",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
     ],
     alwayslink = 1,

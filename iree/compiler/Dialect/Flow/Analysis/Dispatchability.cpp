@@ -21,7 +21,7 @@
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/SymbolTable.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -115,11 +115,10 @@ Optional<bool> Dispatchability::computeDispatchability(FuncOp funcOp) {
         // TODO(benvanik): widen to all known terminators? sometimes they may
         // have side-effects.
         continue;
-      } else if (isa<xla_hlo::DotOp>(op) || isa<xla_hlo::ConvOp>(op)) {
+      } else if (isa<mhlo::DotOp>(op) || isa<mhlo::ConvOp>(op)) {
         // Some unfusable ops must remain on their own.
         return false;
-      } else if (isa<xla_hlo::ReduceOp>(op) ||
-                 isa<xla_hlo::ReduceWindowOp>(op)) {
+      } else if (isa<mhlo::ReduceOp>(op) || isa<mhlo::ReduceWindowOp>(op)) {
         // Reductions always become flow ops.
         return false;
 
@@ -134,7 +133,7 @@ Optional<bool> Dispatchability::computeDispatchability(FuncOp funcOp) {
   }
 
   // All cases not handled above are (probably) dispatchable. This makes what we
-  // do here a blacklist, though as we move towards more frontend dialects that
+  // do here a blocklist, though as we move towards more frontend dialects that
   // may not be the best idea.
   return true;
 }

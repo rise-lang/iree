@@ -27,6 +27,7 @@ load(
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -82,6 +83,7 @@ pybind_cc_library(
     deps = [
         "//bindings/python/pyiree/common",
         "//iree/base:api",
+        "//iree/base:localfile",
         "//iree/base:signature_mangle",
         "//iree/hal:api",
         "//iree/modules/hal",
@@ -117,7 +119,6 @@ iree_py_test(
     python_version = "PY3",
     # TODO(laurenzo): Enable once test does not depend on a real vulkan device.
     tags = [
-        "noga",
         "nokokoro",
     ],
     deps = NUMPY_DEPS + [
@@ -142,7 +143,6 @@ iree_py_test(
     name = "system_api_test",
     srcs = ["system_api_test.py"],
     python_version = "PY3",
-    tags = ["noga"],
     deps = NUMPY_DEPS + [
         ":system_api",
         "//bindings/python:pathsetup",  # build_cleaner: keep

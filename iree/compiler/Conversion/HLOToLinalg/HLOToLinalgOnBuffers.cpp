@@ -15,7 +15,7 @@
 //===- HLOToLinalgOnBuffers.cpp - Pass to convert HLO to Linalg on buffers-===//
 //
 // Pass to convert from HLO to linalg on buffers. Currently only handles cases
-// where the dispatch region contains a single xla_hlo op that can be converted
+// where the dispatch region contains a single mhlo op that can be converted
 // to linalg on buffers.
 //
 //===----------------------------------------------------------------------===//
@@ -23,7 +23,6 @@
 #include <cstddef>
 #include <iostream>
 
-#include "iree/compiler/Conversion/CodegenUtils/MarkerUtils.h"
 #include "iree/compiler/Conversion/HLOToLinalg/Passes.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/IREE/IR/IREEOps.h"
@@ -48,8 +47,8 @@
 #include "mlir/IR/StandardTypes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
-#include "tensorflow/compiler/mlir/xla/transforms/map_xla_to_scalar_op.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/transforms/map_lmhlo_to_scalar_op.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -118,6 +117,8 @@ static unsigned mapDescriptorTypeToMemorySpace(IREE::HAL::DescriptorType type) {
     case IREE::HAL::DescriptorType::UniformBuffer:
     case IREE::HAL::DescriptorType::UniformBufferDynamic:
       return 4;
+    default:
+      llvm_unreachable("unexpected descriptor type");
   }
 }
 
@@ -235,7 +236,7 @@ struct ConvertToLinalgBufferOp : public OpConversionPattern<SrcOpTy> {
 }  // namespace
 
 //===----------------------------------------------------------------------===//
-// xla_hlo.dot conversion patterns.
+// mhlo.dot conversion patterns.
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -247,7 +248,7 @@ enum class DotOperationType {
 };
 }
 
-static DotOperationType getDotOperationType(xla_hlo::DotOp dotOp) {
+static DotOperationType getDotOperationType(mhlo::DotOp dotOp) {
   ArrayRef<int64_t> lhsShape =
       dotOp.lhs().getType().cast<ShapedType>().getShape();
   ArrayRef<int64_t> rhsShape =
@@ -268,16 +269,15 @@ static DotOperationType getDotOperationType(xla_hlo::DotOp dotOp) {
   return DotOperationType::Unsupported;
 }
 
-
 namespace {
-/// Converts xla_hlo.dot operation to linalg.matmul op
+/// Converts mhlo.dot operation to linalg.matmul op
 template <DotOperationType opType, typename LinalgOpTy>
 struct DotOpConversion
     : public ConvertToLinalgBufferOp<DotOpConversion<opType, LinalgOpTy>,
-                                     xla_hlo::DotOp> {
+                                     mhlo::DotOp> {
   using ConvertToLinalgBufferOp<DotOpConversion<opType, LinalgOpTy>,
-                                xla_hlo::DotOp>::ConvertToLinalgBufferOp;
-  LogicalResult apply(xla_hlo::DotOp op, ArrayRef<Value> inputBuffers,
+                                mhlo::DotOp>::ConvertToLinalgBufferOp;
+  LogicalResult apply(mhlo::DotOp op, ArrayRef<Value> inputBuffers,
                       ArrayRef<Value> resultBuffers,
                       ConversionPatternRewriter &rewriter) const {
     if (getDotOperationType(op) == opType) {
@@ -285,8 +285,9 @@ struct DotOpConversion
         rewriter.notifyMatchFailure(op, "failed to zero fill result buffer");
         return failure();
       }
-      rewriter.create<LinalgOpTy>(op.getLoc(), inputBuffers[0], inputBuffers[1],
-                                  resultBuffers[0]);
+      rewriter.create<LinalgOpTy>(
+          op.getLoc(), TypeRange{},
+          ValueRange{inputBuffers[0], inputBuffers[1], resultBuffers[0]});
       return success();
     }
     return failure();
@@ -295,15 +296,15 @@ struct DotOpConversion
 }  // namespace
 
 namespace {
-/// Converts xla_hlo.dot operation to rise matrix multiplication program
+/// Converts mhlo.dot operation to rise matrix multiplication
 template <DotOperationType opType, typename LinalgOpTy>
 struct RiseDotOpConversion
     : public ConvertToLinalgBufferOp<RiseDotOpConversion<opType, LinalgOpTy>,
-                                     xla_hlo::DotOp> {
+                                     mhlo::DotOp> {
   using ConvertToLinalgBufferOp<RiseDotOpConversion<opType, LinalgOpTy>,
-                                xla_hlo::DotOp>::ConvertToLinalgBufferOp;
+                                mhlo::DotOp>::ConvertToLinalgBufferOp;
 
-  LogicalResult apply(xla_hlo::DotOp op, ArrayRef<Value> inputBuffers,
+  LogicalResult apply(mhlo::DotOp op, ArrayRef<Value> inputBuffers,
                       ArrayRef<Value> resultBuffers,
                       ConversionPatternRewriter &rewriter) const {
     if (getDotOperationType(op) == opType) {
@@ -316,13 +317,14 @@ struct RiseDotOpConversion
       ArrayRef<int64_t> rhsShape =
           op.rhs().getType().cast<ShapedType>().getShape();
       if (opType != DotOperationType::MatrixMatrix) {
-        rewriter.create<LinalgOpTy>(op.getLoc(), inputBuffers[0],
-                                    inputBuffers[1], resultBuffers[0]);
+        rewriter.create<LinalgOpTy>(
+            op.getLoc(), TypeRange{},
+            ValueRange{inputBuffers[0], inputBuffers[1], resultBuffers[0]});
       } else {
-        std::cout << "\nrise dot translation! for mm of A[" << lhsShape[0]
-                  << "," << lhsShape[1] << "], B[" << rhsShape[0] << ","
-                  << rhsShape[1] << "]\n\n"
-                  << std::flush;
+//        std::cout << "\nrise dot translation! for mm of A[" << lhsShape[0]
+//                  << "," << lhsShape[1] << "], B[" << rhsShape[0] << ","
+//                  << rhsShape[1] << "]\n\n"
+//                  << std::flush;
 
         OpBuilder builder(op);
         edsc::ScopedContext scope(builder, op.getLoc());
@@ -399,133 +401,23 @@ struct RiseDotOpConversion
 }  // namespace
 
 //===----------------------------------------------------------------------===//
-// xla_hlo.convolution conversion patterns and utility functions.
+// mhlo.convolution conversion patterns and utility functions.
 //===----------------------------------------------------------------------===//
 
 namespace {
 /// Converts xla_hlo.convolution operation to linalg.conv op.
 struct RiseConvOpConversion
-    : public ConvertToLinalgBufferOp<RiseConvOpConversion, xla_hlo::ConvOp> {
+    : public ConvertToLinalgBufferOp<RiseConvOpConversion, mhlo::ConvOp> {
   using ConvertToLinalgBufferOp<RiseConvOpConversion,
-      xla_hlo::ConvOp>::ConvertToLinalgBufferOp;
-  LogicalResult apply(xla_hlo::ConvOp op, ArrayRef<Value> inputBuffers,
+                                mhlo::ConvOp>::ConvertToLinalgBufferOp;
+  LogicalResult apply(mhlo::ConvOp op, ArrayRef<Value> inputBuffers,
                       ArrayRef<Value> resultBuffers,
                       ConversionPatternRewriter &rewriter) const;
 };
 }  // namespace
 
 LogicalResult RiseConvOpConversion::apply(
-    xla_hlo::ConvOp op, ArrayRef<Value> inputBuffers,
-    ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
-  if (const auto dimensionNumbers = op.dimension_numbers()) {
-    const int inputSpatialRank =
-        llvm::size(dimensionNumbers.input_spatial_dimensions());
-    // The dimensions for input should follow the order of
-    // batch_count, spatial_dims..., input_feature_count.
-    if (dimensionNumbers.input_batch_dimension().getInt() != 0 ||
-        dimensionNumbers.input_feature_dimension().getInt() !=
-        (inputSpatialRank + 1))
-      return failure();
-
-    const int kernelSpatialRank =
-        llvm::size(dimensionNumbers.kernel_spatial_dimensions());
-    // The dimensions for filter should follow the order of
-    // spatial_dims..., input_feature_count, num_output_feature_count.
-    if (dimensionNumbers.kernel_input_feature_dimension().getInt() !=
-        kernelSpatialRank ||
-        dimensionNumbers.kernel_output_feature_dimension().getInt() !=
-        (kernelSpatialRank + 1))
-      return failure();
-
-    const int outputSpatialRank =
-        llvm::size(dimensionNumbers.output_spatial_dimensions());
-    // The dimensions for output should follow the order of
-    // batch_count, spatial_dims.., output_feature_count.
-    if (dimensionNumbers.output_batch_dimension().getInt() != 0 ||
-        dimensionNumbers.output_feature_dimension().getInt() !=
-        (outputSpatialRank + 1))
-      return failure();
-
-    if (inputSpatialRank != outputSpatialRank ||
-        inputSpatialRank != kernelSpatialRank)
-      return failure();
-
-    auto inputSpatialDim = dimensionNumbers.input_spatial_dimensions().begin();
-    auto kernelSpatialDim =
-        dimensionNumbers.kernel_spatial_dimensions().begin();
-    auto outputSpatialDim =
-        dimensionNumbers.output_spatial_dimensions().begin();
-    // Check spatial dims are ordred correctly.
-    for (int i = 0; i < inputSpatialRank; ++i) {
-      const int dim = i + 1;
-      if ((*inputSpatialDim++).getZExtValue() != dim ||
-          (*outputSpatialDim++).getZExtValue() != dim ||
-          (*kernelSpatialDim++).getZExtValue() != i)
-        return failure();
-    }
-  }
-
-  llvm::SmallVector<Attribute, 4> strides;
-  if (auto windowStrides = op.window_strides()) {
-    auto range = windowStrides->getAttributeValues();
-    strides.append(range.begin(), range.end());
-  }
-  auto stridesArg = ArrayAttr::get(strides, op.getContext());
-
-  // TODO(ataei): Only support dilated convolution for now. We need to consider
-  // LHS dilation for deconvolution cases.
-  llvm::SmallVector<Attribute, 4> dilation;
-  if (auto rhsDilation = op.rhs_dilation()) {
-    auto range = rhsDilation->getAttributeValues();
-    dilation.append(range.begin(), range.end());
-  }
-  auto dilationArg = ArrayAttr::get(dilation, op.getContext());
-
-  // Set padding only if it is non-zero.
-  DenseIntElementsAttr padding = op.paddingAttr();
-  if (!padding || !llvm::any_of(padding.getValues<APInt>(), [](APInt intVal) {
-    return !intVal.isNullValue();
-  })) {
-    padding = nullptr;
-  }
-
-  if (failed(zeroFillBuffer(op.getLoc(), resultBuffers[0], rewriter))) {
-    rewriter.notifyMatchFailure(op, "failed to zero fill result buffer");
-    return failure();
-  }
-
-  using namespace mlir::edsc::op;
-  using namespace mlir::edsc::type;
-  using namespace mlir::edsc::highlevel;
-
-
-
-//  Value input = in(inputBuffers[0], array2DType(128, 128, scalarF32Type()));
-//  Value kernel = in(inputBuffers[1], array2DType(3, 3, scalarF32Type()));
-//  Value conv = conv2D(input, kernel);
-//  out(resultBuffers[0], conv);
-
-
-  rewriter.create<linalg::ConvOp>(op.getLoc(), inputBuffers[1], inputBuffers[0],
-                                  resultBuffers[0], stridesArg, dilationArg,
-                                  padding);
-  return success();
-}
-
-namespace {
-/// Converts xla_hlo.convolution operation to linalg.conv op.
-struct ConvOpConversion
-    : public ConvertToLinalgBufferOp<ConvOpConversion, xla_hlo::ConvOp> {
-  using ConvertToLinalgBufferOp<ConvOpConversion,
-                                xla_hlo::ConvOp>::ConvertToLinalgBufferOp;
-  LogicalResult apply(xla_hlo::ConvOp op, ArrayRef<Value> inputBuffers,
-                      ArrayRef<Value> resultBuffers,
-                      ConversionPatternRewriter &rewriter) const;
-};
-}  // namespace
-
-LogicalResult ConvOpConversion::apply(
-    xla_hlo::ConvOp op, ArrayRef<Value> inputBuffers,
+    mhlo::ConvOp op, ArrayRef<Value> inputBuffers,
     ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
   if (const auto dimensionNumbers = op.dimension_numbers()) {
     const int inputSpatialRank =
@@ -603,34 +495,312 @@ LogicalResult ConvOpConversion::apply(
     rewriter.notifyMatchFailure(op, "failed to zero fill result buffer");
     return failure();
   }
-  rewriter.create<linalg::ConvOp>(op.getLoc(), inputBuffers[1], inputBuffers[0],
+
+  using namespace mlir::edsc::op;
+  using namespace mlir::edsc::type;
+  using namespace mlir::edsc::abstraction;
+  using namespace mlir::edsc::highlevel;
+
+//  std::cout << "\nrise conv translation! "
+//            << "\n\n"
+//            << std::flush;
+
+  OpBuilder builder(op);
+  edsc::ScopedContext scope(builder, op.getLoc());
+
+  //    Value input = in(inputBuffers[0], array2DType(3, 5, array2DType(5, 3,
+  //    scalarF32Type())));
+  //
+  //    mapSeq2D(array2DType(5, 3, scalarF32Type()), [](BlockArgument arr2D) {
+  //      return mapSeq2D(scalarF32Type(), [](BlockArgument elem){
+  //            return embed1(scalarF32Type(), elem, [](BlockArgument elem){
+  //                return elem + elem - elem;
+  //                });
+  //          }, arr2D);
+  //    }, input);
+  ArrayRef<int64_t> inShape =
+      inputBuffers[0].getType().dyn_cast<MemRefType>().getShape();
+  ArrayRef<int64_t> kernelShape =
+      inputBuffers[1].getType().dyn_cast<MemRefType>().getShape();
+  ArrayRef<int64_t> resultShape =
+      resultBuffers[0].getType().dyn_cast<MemRefType>().getShape();
+
+  //  ArrayType inputType = arrayType(inShape[inShape.size()-1],
+  //  scalarF32Type());
+  DataType inputType = scalarF32Type();
+  for (auto size = inShape.rbegin(); size != inShape.rend(); size++) {
+    inputType = arrayType(*size, inputType);
+  }
+//  inputType.dump();
+
+  DataType kernelType = scalarF32Type();
+  for (auto size = kernelShape.rbegin(); size != kernelShape.rend(); size++) {
+    kernelType = arrayType(*size, kernelType);
+  }
+//  kernelType.dump();
+
+  DataType resultType = scalarF32Type();
+  for (auto size = resultShape.rbegin(); size != resultShape.rend(); size++) {
+    resultType = arrayType(*size, resultType);
+  }
+//  resultType.dump();
+
+  assert(inShape[0] == 1 && "batchsize 1 required!");
+  assert(inShape[3] == 1 && "inner dimension has to be 1 currently!");
+  assert(kernelShape[2] == 1 && "kernel shape incorrect");
+  assert(kernelShape[3] == 1 && "kernel shape incorrect");
+
+  lowering_unit([&](){
+    Value input = in(inputBuffers[0], inputType);
+    Value kernel = in(inputBuffers[1], kernelType);
+
+    // preparing data
+    Value reshapedInput = join(map(
+        array2DType(inShape[1], inShape[2], scalarF32Type()),
+        [&](Value array) {
+          return map(
+              arrayType(inShape[2], scalarF32Type()),
+              [&](Value elem) { return join(elem); }, array);
+        },
+        input));
+
+    Value reshapedKernel = map(
+        arrayType(kernelShape[1], scalarF32Type()),
+        [&](Value array) { return join(join(array)); }, kernel);
+
+    Value conv = conv2DTF(reshapedInput, reshapedKernel);
+    conv.getType().dump();
+    out(resultBuffers[0], conv);
+  });
+
+  return success();
+}
+//
+ namespace {
+/// Converts mhlo.convolution operation to linalg.conv op.
+ struct ConvOpConversion
+    : public ConvertToLinalgBufferOp<ConvOpConversion, mhlo::ConvOp> {
+  using ConvertToLinalgBufferOp<ConvOpConversion,
+                                mhlo::ConvOp>::ConvertToLinalgBufferOp;
+  LogicalResult apply(mhlo::ConvOp op, ArrayRef<Value> inputBuffers,
+                      ArrayRef<Value> resultBuffers,
+                      ConversionPatternRewriter &rewriter) const;
+};
+}  // namespace
+
+ LogicalResult ConvOpConversion::apply(
+    mhlo::ConvOp op, ArrayRef<Value> inputBuffers,
+    ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const
+    {
+  if (const auto dimensionNumbers = op.dimension_numbers()) {
+    const int inputSpatialRank =
+        llvm::size(dimensionNumbers.input_spatial_dimensions());
+    // The dimensions for input should follow the order of
+    // batch_count, spatial_dims..., input_feature_count.
+    if (dimensionNumbers.input_batch_dimension().getInt() != 0 ||
+        dimensionNumbers.input_feature_dimension().getInt() !=
+            (inputSpatialRank + 1))
+      return failure();  //
+
+    const int kernelSpatialRank =
+        llvm::size(dimensionNumbers.kernel_spatial_dimensions());
+    // The dimensions for filter should follow the order of
+    // spatial_dims..., input_feature_count, num_output_feature_count.
+    const int kernelOutputFeatureDim =
+        dimensionNumbers.kernel_output_feature_dimension().getInt();
+    if (dimensionNumbers.kernel_input_feature_dimension().getInt() !=
+            kernelSpatialRank ||
+        dimensionNumbers.kernel_output_feature_dimension().getInt() !=
+            (kernelSpatialRank + 1))
+      return failure();
+
+    const int outputSpatialRank =
+        llvm::size(dimensionNumbers.output_spatial_dimensions());
+    // The dimensions for output should follow the order of
+    // batch_count, spatial_dims.., output_feature_count.
+    if (dimensionNumbers.output_batch_dimension().getInt() != 0 ||
+        dimensionNumbers.output_feature_dimension().getInt() !=
+            (outputSpatialRank + 1))
+      return failure();
+
+    if (inputSpatialRank != outputSpatialRank ||
+        inputSpatialRank != kernelSpatialRank)
+      return failure();
+
+    auto inputSpatialDim =
+    dimensionNumbers.input_spatial_dimensions().begin(); auto kernelSpatialDim
+    =
+        dimensionNumbers.kernel_spatial_dimensions().begin();
+    auto outputSpatialDim =
+        dimensionNumbers.output_spatial_dimensions().begin();
+    // Check spatial dims are ordred correctly.
+    for (int i = 0; i < inputSpatialRank; ++i) {
+      const int dim = i + 1;
+      if ((*inputSpatialDim++).getZExtValue() != dim ||
+          (*outputSpatialDim++).getZExtValue() != dim ||
+          (*kernelSpatialDim++).getZExtValue() != i)
+        return failure();
+    }
+  }
+
+  llvm::SmallVector<Attribute, 4> strides;
+  if (auto windowStrides = op.window_strides()) {
+    auto range = windowStrides->getAttributeValues();
+    strides.append(range.begin(), range.end());
+  }
+  auto stridesArg = ArrayAttr::get(strides, op.getContext());
+
+  // TODO(ataei): Only support dilated convolution for now. We need to
+  // LHS dilation for deconvolution cases.
+  llvm::SmallVector<Attribute, 4> dilation;
+  if (auto rhsDilation = op.rhs_dilation()) {
+    auto range = rhsDilation->getAttributeValues();
+    dilation.append(range.begin(), range.end());
+  }
+  auto dilationArg = ArrayAttr::get(dilation, op.getContext());
+
+  // Set padding only if it is non-zero.
+  DenseIntElementsAttr padding = op.paddingAttr();
+  if (!padding || !llvm::any_of(padding.getValues<APInt>(), [](APInt intVal) {
+        return !intVal.isNullValue();
+      })) {
+    padding = nullptr;
+  }
+
+  if (failed(zeroFillBuffer(op.getLoc(), resultBuffers[0], rewriter))) {
+    rewriter.notifyMatchFailure(op, "failed to zero fill result buffer");
+    return failure();
+  }
+  rewriter.create<linalg::ConvOp>(op.getLoc(), inputBuffers[1],
+  inputBuffers[0],
                                   resultBuffers[0], stridesArg, dilationArg,
                                   padding);
   return success();
 }
 
 //===----------------------------------------------------------------------===//
-// xla_hlo.pad conversion patterns and utility functions.
+// mhlo.concatenate conversion patterns and utility functions.
 //===----------------------------------------------------------------------===//
 
 namespace {
-/// Converts xla_hlo.pad operation to linalg.indexed_generic op.
-// TODO(GH-1604): Lower the pad op to a Linalg named op.
-struct PadOpConversion
-    : public ConvertToLinalgBufferOp<PadOpConversion, xla_hlo::PadOp> {
-  using ConvertToLinalgBufferOp<PadOpConversion,
-                                xla_hlo::PadOp>::ConvertToLinalgBufferOp;
+/// Converts a mhlo.concatenate op to an indexed_generic op. The
+/// implementation adds more dimensions to make the loops correct, because
+/// each dimension in indexing maps matches to exactly one range.
+class ConcatenateOpConversion
+    : public ConvertToLinalgBufferOp<ConcatenateOpConversion,
+                                     mhlo::ConcatenateOp> {
+ public:
+  using ConvertToLinalgBufferOp<ConcatenateOpConversion,
+                                mhlo::ConcatenateOp>::ConvertToLinalgBufferOp;
+  LogicalResult apply(mhlo::ConcatenateOp op, ArrayRef<Value> inputBuffers,
+                      ArrayRef<Value> resultBuffers,
+                      ConversionPatternRewriter &rewriter) const;
+};
+}  // namespace
 
-  LogicalResult apply(xla_hlo::PadOp op, ArrayRef<Value> inputBuffers,
+LogicalResult ConcatenateOpConversion::apply(
+    mhlo::ConcatenateOp op, ArrayRef<Value> inputBuffers,
+    ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
+  Location loc = op.getLoc();
+  int dim = op.dimension().getSExtValue();
+  int rank = inputBuffers[0].getType().cast<ShapedType>().getRank();
+
+  SmallVector<Attribute, 2> indexingMaps;
+  SmallVector<AffineExpr, 4> exprs;
+  exprs.resize(rank);
+  for (int i = 0, j = 0, e = rank; i < e; ++i) {
+    if (i == dim) continue;
+    exprs[i] = rewriter.getAffineDimExpr(j++);
+  }
+  int nloops = rank + inputBuffers.size();
+  for (int i = 0, e = inputBuffers.size(); i < e; ++i) {
+    exprs[dim] = rewriter.getAffineDimExpr(rank + i);
+    indexingMaps.emplace_back(AffineMapAttr::get(AffineMap::get(
+        nloops, /*symbolCount=*/0, exprs, rewriter.getContext())));
+  }
+  exprs[dim] = rewriter.getAffineDimExpr(rank - 1);
+  indexingMaps.emplace_back(AffineMapAttr::get(
+      AffineMap::get(nloops, /*symbolCount=*/0, exprs, rewriter.getContext())));
+
+  SmallVector<Type, 4> bodyArgTypes, opResultTypes;
+  // Also make the dimension to be concatenated not a parallel loop.
+  int nonParallelLoops = nloops - rank + 1;
+  SmallVector<Value, 2> linalgOpArgs(inputBuffers.begin(), inputBuffers.end());
+  linalgOpArgs.push_back(resultBuffers[0]);
+  auto linalgOp = rewriter.create<linalg::IndexedGenericOp>(
+      loc, opResultTypes, linalgOpArgs,
+      rewriter.getI64IntegerAttr(inputBuffers.size()),  // args_in
+      rewriter.getI64IntegerAttr(1),                    // args_out
+      rewriter.getArrayAttr(indexingMaps),
+      getParallelAndReductionIterAttrs(rewriter, nloops, nonParallelLoops),
+      /*doc=*/nullptr, /*library_call=*/nullptr);
+
+  // Add a block to the region.
+  auto *region = &linalgOp.region();
+  auto *block = rewriter.createBlock(region, region->end());
+  bodyArgTypes.append(nloops, rewriter.getIndexType());
+  auto resultType = op.getResult().getType().dyn_cast<ShapedType>();
+  bodyArgTypes.append(linalgOpArgs.size(), resultType.getElementType());
+  block->addArguments(bodyArgTypes);
+  rewriter.setInsertionPointToEnd(block);
+
+  Value accBound = rewriter.create<ConstantIndexOp>(loc, 0);
+  Value dimArg = block->getArgument(rank - 1);
+  Value res = block->getArgument(nloops);
+  // Update the output buffer only when it iterate on the correct index of the
+  // operand. For example, if we are updating the first element of the
+  // concatenating dimension, the index of the first operand must be 0. If it's
+  // 1 or other, we need to keep the element the same.
+  Value canUpdate =
+      rewriter.create<ConstantIntOp>(loc, /*value=*/0, /*width=*/1);
+  for (int i = 0, e = inputBuffers.size(); i < e; ++i) {
+    Value t1 = rewriter.create<SubIOp>(loc, dimArg, accBound);
+    // The loop indice of operands start from the `rank`-th argument of the
+    // block.
+    Value t2 = rewriter.create<CmpIOp>(loc, CmpIPredicate::eq, t1,
+                                       block->getArgument(rank + i));
+    canUpdate = rewriter.create<OrOp>(loc, canUpdate, t2);
+
+    Value dimSize = rewriter.create<DimOp>(loc, inputBuffers[i], dim);
+    Value lbCond =
+        rewriter.create<CmpIOp>(loc, CmpIPredicate::sge, dimArg, accBound);
+    accBound = rewriter.create<AddIOp>(loc, accBound, dimSize);
+    Value ubCond =
+        rewriter.create<CmpIOp>(loc, CmpIPredicate::slt, dimArg, accBound);
+    Value cond = rewriter.create<AndOp>(loc, lbCond, ubCond);
+    // The first `nloops` arguments are indices.
+    res = rewriter.create<SelectOp>(loc, cond, block->getArgument(nloops + i),
+                                    res);
+  }
+  res = rewriter.create<SelectOp>(
+      loc, canUpdate, res, block->getArgument(nloops + inputBuffers.size()));
+  rewriter.create<linalg::YieldOp>(loc, res);
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// mhlo.pad conversion patterns and utility functions.
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// Converts mhlo.pad operation to linalg.indexed_generic op.
+// TODO(#1604): Lower the pad op to a Linalg named op.
+struct PadOpConversion
+    : public ConvertToLinalgBufferOp<PadOpConversion, mhlo::PadOp> {
+  using ConvertToLinalgBufferOp<PadOpConversion,
+                                mhlo::PadOp>::ConvertToLinalgBufferOp;
+
+  LogicalResult apply(mhlo::PadOp op, ArrayRef<Value> inputBuffers,
                       ArrayRef<Value> resultBuffers,
                       ConversionPatternRewriter &rewriter) const;
 };
 }  // namespace
 
 /// Returns an AffineMapAttr that is the indexing map to use for the input of a
-/// xla_hlo.pad `op`.
+/// mhlo.pad `op`.
 static AffineMapAttr getPadOpInputIndexingMap(
-    xla_hlo::PadOp op, int rank, ConversionPatternRewriter &rewriter) {
+    mhlo::PadOp op, int rank, ConversionPatternRewriter &rewriter) {
   const auto edgePaddingLow = convertDenseIntAttr(op.edge_padding_low());
   SmallVector<AffineExpr, 4> exprs;
   for (int i = 0; i < rank; ++i)
@@ -640,14 +810,14 @@ static AffineMapAttr getPadOpInputIndexingMap(
 }
 
 LogicalResult PadOpConversion::apply(
-    xla_hlo::PadOp op, ArrayRef<Value> inputBuffers,
-    ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
+    mhlo::PadOp op, ArrayRef<Value> inputBuffers, ArrayRef<Value> resultBuffers,
+    ConversionPatternRewriter &rewriter) const {
   if (llvm::any_of(op.interior_padding().getValues<IntegerAttr>(),
                    [](auto attr) { return attr.getInt() != 0; }))
     return op.emitError(
         "pad op with non-zero interiror_padding is not supported");
 
-  xla_hlo::PadOpOperandAdaptor adaptor(inputBuffers);
+  mhlo::PadOp::Adaptor adaptor(inputBuffers);
   auto loc = op.getLoc();
 
   Attribute paddingConstVal = getInitValueAsConst(adaptor.padding_value());
@@ -732,13 +902,54 @@ LogicalResult PadOpConversion::apply(
       cond ? rewriter.create<SelectOp>(loc, cond, inputVal, paddingVal)
            : inputVal;
   rewriter.create<linalg::YieldOp>(loc, result);
-
-  setNoTileMarker(linalgOp);
   return success();
 }
 
 //===----------------------------------------------------------------------===//
-// xla_hlo.torch_index_select conversion patterns.
+// mhlo.slice conversion patterns.
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// Converts mhlo.slice operation to linalg.subview + linalg.copy
+struct SliceOpConversion
+    : public ConvertToLinalgBufferOp<SliceOpConversion, mhlo::SliceOp> {
+  using ConvertToLinalgBufferOp<SliceOpConversion,
+                                mhlo::SliceOp>::ConvertToLinalgBufferOp;
+
+  LogicalResult apply(mhlo::SliceOp op, ArrayRef<Value> inputBuffers,
+                      ArrayRef<Value> resultBuffers,
+                      ConversionPatternRewriter &rewriter) const;
+};
+}  // namespace
+
+LogicalResult SliceOpConversion::apply(
+    mhlo::SliceOp op, ArrayRef<Value> inputBuffers,
+    ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
+  auto loc = op.getLoc();
+  auto argType = inputBuffers[0].getType().template dyn_cast<ShapedType>();
+  if (!argType || !argType.hasRank())
+    return op.emitError("expected known-rank args");
+
+  SmallVector<Value, 3> offsets, sizes, strides;
+  for (int i = 0, e = argType.getRank(); i < e; ++i) {
+    Value startIndex = rewriter.create<ConstantIndexOp>(
+        loc, op.start_indices().getValue<int64_t>(i));
+    offsets.push_back(startIndex);
+    Value size = rewriter.create<DimOp>(loc, resultBuffers[0], i);
+    sizes.push_back(size);
+    Value stride = rewriter.create<ConstantIndexOp>(
+        loc, op.strides().getValue<int64_t>(i));
+    strides.push_back(stride);
+  }
+  auto subViewOp =
+      rewriter.create<SubViewOp>(loc, inputBuffers[0], offsets, sizes, strides);
+  rewriter.create<linalg::CopyOp>(loc, subViewOp, resultBuffers[0]);
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// mhlo.torch_index_select conversion patterns.
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -750,22 +961,21 @@ namespace {
 /// graph. It is just a magic buffer outside operations.
 struct TorchIndexSelectOpConversion
     : public ConvertToLinalgBufferOp<TorchIndexSelectOpConversion,
-                                     xla_hlo::TorchIndexSelectOp> {
+                                     mhlo::TorchIndexSelectOp> {
   using ConvertToLinalgBufferOp<
       TorchIndexSelectOpConversion,
-      xla_hlo::TorchIndexSelectOp>::ConvertToLinalgBufferOp;
+      mhlo::TorchIndexSelectOp>::ConvertToLinalgBufferOp;
 
-  LogicalResult apply(xla_hlo::TorchIndexSelectOp op,
-                      ArrayRef<Value> inputBuffers,
+  LogicalResult apply(mhlo::TorchIndexSelectOp op, ArrayRef<Value> inputBuffers,
                       ArrayRef<Value> resultBuffers,
                       ConversionPatternRewriter &rewriter) const;
 };
 }  // namespace
 
 LogicalResult TorchIndexSelectOpConversion::apply(
-    xla_hlo::TorchIndexSelectOp op, ArrayRef<Value> inputBuffers,
+    mhlo::TorchIndexSelectOp op, ArrayRef<Value> inputBuffers,
     ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
-  xla_hlo::TorchIndexSelectOpOperandAdaptor adaptor(inputBuffers);
+  mhlo::TorchIndexSelectOp::Adaptor adaptor(inputBuffers);
   int axis = op.dim().getSExtValue();
   int batch = op.batch_dims().getSExtValue();
   auto indexShapeType = adaptor.index().getType().dyn_cast<ShapedType>();
@@ -822,12 +1032,12 @@ LogicalResult TorchIndexSelectOpConversion::apply(
 }
 
 //===----------------------------------------------------------------------===//
-// xla_hlo.reduce_window conversion patterns and utility functions.
+// mhlo.reduce_window conversion patterns and utility functions.
 //===----------------------------------------------------------------------===//
 
 namespace {
 
-/// xla_hlo.reduce_window is mapped to a linalg.pooling operation. The type of
+/// mhlo.reduce_window is mapped to a linalg.pooling operation. The type of
 /// the pooling is determined based on the body of the reduce window
 /// operation. This class enumerates the different variants.
 enum class PoolingType {
@@ -838,12 +1048,11 @@ enum class PoolingType {
 
 struct ReduceWindowOpConversion
     : public ConvertToLinalgBufferOp<ReduceWindowOpConversion,
-                                     xla_hlo::ReduceWindowOp> {
-  using ConvertToLinalgBufferOp<
-      ReduceWindowOpConversion,
-      xla_hlo::ReduceWindowOp>::ConvertToLinalgBufferOp;
+                                     mhlo::ReduceWindowOp> {
+  using ConvertToLinalgBufferOp<ReduceWindowOpConversion,
+                                mhlo::ReduceWindowOp>::ConvertToLinalgBufferOp;
 
-  LogicalResult apply(xla_hlo::ReduceWindowOp op, ArrayRef<Value> inputBuffers,
+  LogicalResult apply(mhlo::ReduceWindowOp op, ArrayRef<Value> inputBuffers,
                       ArrayRef<Value> resultBuffers,
                       ConversionPatternRewriter &rewriter) const;
 };
@@ -856,15 +1065,15 @@ static PoolingType getPoolingType(Region &region) {
   assert(block.getOperations().size() == 2 &&
          "expected the block has exactlly two operations");
   auto op = block.begin();
-  if (isa<xla_hlo::MinOp>(op)) return PoolingType::kMin;
-  if (isa<xla_hlo::MaxOp>(op)) return PoolingType::kMax;
-  if (isa<xla_hlo::AddOp>(op)) return PoolingType::kAdd;
+  if (isa<mhlo::MinOp>(op)) return PoolingType::kMin;
+  if (isa<mhlo::MaxOp>(op)) return PoolingType::kMax;
+  if (isa<mhlo::AddOp>(op)) return PoolingType::kAdd;
 
   llvm_unreachable("unknown pooling type");
 }
 
 LogicalResult ReduceWindowOpConversion::apply(
-    xla_hlo::ReduceWindowOp op, ArrayRef<Value> inputBuffers,
+    mhlo::ReduceWindowOp op, ArrayRef<Value> inputBuffers,
     ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
   auto loc = op.getLoc();
 
@@ -923,7 +1132,7 @@ LogicalResult ReduceWindowOpConversion::apply(
 }
 
 //===----------------------------------------------------------------------===//
-// xla_hlo.reduce conversion patterns and utility functions.
+// mhlo.reduce conversion patterns and utility functions.
 //===----------------------------------------------------------------------===//
 
 /// Returns a permutation AffineMap that puts all reduction dimensions to the
@@ -954,7 +1163,7 @@ static bool isWithinReduceOpRegion(Operation *op) {
 
 namespace {
 
-/// Type converter for converting the region of an xla_hlo::reduce op.
+/// Type converter for converting the region of an mhlo::reduce op.
 class ReduceRegionTypeConverter : public TypeConverter {
  public:
   Type convertType(Type type) const {
@@ -967,15 +1176,15 @@ class ReduceRegionTypeConverter : public TypeConverter {
   }
 };
 
-/// Converts the xla_hlo.reduce op on tensors to a linalg.indexed_generic op on
+/// Converts the mhlo.reduce op on tensors to a linalg.indexed_generic op on
 /// buffers. Expects that the reduce op is the only op within the dispatch
 /// function. This pattern also fuses std.constant operations which are defining
 /// ops of the init value with the linalg.indexed_generic op.
 struct ReduceOpConversion
-    : public ConvertToLinalgBufferOp<ReduceOpConversion, xla_hlo::ReduceOp> {
+    : public ConvertToLinalgBufferOp<ReduceOpConversion, mhlo::ReduceOp> {
   using ConvertToLinalgBufferOp<ReduceOpConversion,
-                                xla_hlo::ReduceOp>::ConvertToLinalgBufferOp;
-  LogicalResult apply(xla_hlo::ReduceOp reduceOp, ArrayRef<Value> inputBuffers,
+                                mhlo::ReduceOp>::ConvertToLinalgBufferOp;
+  LogicalResult apply(mhlo::ReduceOp reduceOp, ArrayRef<Value> inputBuffers,
                       ArrayRef<Value> resultBuffers,
                       ConversionPatternRewriter &rewriter) const;
 
@@ -1014,19 +1223,19 @@ struct ReduceRegionXLAOpConversion final
                                  OpTy>::ReduceRegionOpConversion;
   static Operation *apply(OpTy op, ArrayRef<Value> operands,
                           ConversionPatternRewriter &rewriter) {
-    Value result = xla_lhlo::XlaOpToStdScalarOp::map<OpTy>(
+    Value result = lmhlo::HloOpToStdScalarOp::map<OpTy>(
         op, operands[0].getType(), operands, &rewriter);
     return result.getDefiningOp();
   }
 };
 
-/// Converts xla_hlo.return to within a reduce region to a linalg.yield.
+/// Converts mhlo.return to within a reduce region to a linalg.yield.
 struct ReduceRegionReturnOpConversion final
     : public ReduceRegionOpConversion<ReduceRegionReturnOpConversion,
-                                      xla_hlo::ReturnOp> {
+                                      mhlo::ReturnOp> {
   using ReduceRegionOpConversion<ReduceRegionReturnOpConversion,
-                                 xla_hlo::ReturnOp>::ReduceRegionOpConversion;
-  static Operation *apply(xla_hlo::ReturnOp op, ArrayRef<Value> operands,
+                                 mhlo::ReturnOp>::ReduceRegionOpConversion;
+  static Operation *apply(mhlo::ReturnOp op, ArrayRef<Value> operands,
                           ConversionPatternRewriter &rewriter) {
     return rewriter.create<linalg::YieldOp>(op.getLoc(), operands[0]);
   }
@@ -1034,7 +1243,7 @@ struct ReduceRegionReturnOpConversion final
 }  // namespace
 
 LogicalResult ReduceOpConversion::apply(
-    xla_hlo::ReduceOp reduceOp, ArrayRef<Value> inputBuffers,
+    mhlo::ReduceOp reduceOp, ArrayRef<Value> inputBuffers,
     ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
   if (reduceOp.getNumOperands() != 2) return failure();
   Value src = *reduceOp.operands().begin();
@@ -1219,11 +1428,7 @@ struct TensorReshapeOpConversion
   LogicalResult matchAndRewrite(
       linalg::TensorReshapeOp reshapeOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    linalg::TensorReshapeOpOperandAdaptor adaptor(operands);
-    if (!reshapeOp.src().hasOneUse())
-      return reshapeOp.emitError(
-          "unhandled conversion of tensor_reshape op when operand has more "
-          "than one uses");
+    linalg::TensorReshapeOp::Adaptor adaptor(operands);
     if (Value buffer =
             resolveResult(reshapeOp.src(), adaptor.src(), reshapeOp.result(),
                           resultTensorToBufferMap))
@@ -1258,7 +1463,7 @@ struct ShapeOpPattern final : public OpConversionPattern<Shape::TieShapeOp> {
   LogicalResult matchAndRewrite(
       Shape::TieShapeOp shapeOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    Shape::TieShapeOpOperandAdaptor adaptor(operands);
+    Shape::TieShapeOp::Adaptor adaptor(operands);
     if (Value buffer = resolveResult(shapeOp.operand(), adaptor.operand(),
                                      shapeOp.result(), resultTensorToBufferMap))
       rewriter.replaceOp(shapeOp, buffer);
@@ -1332,7 +1537,7 @@ struct HALInterfaceStoreTensorOpEraser final
   LogicalResult matchAndRewrite(
       IREE::HAL::InterfaceStoreTensorOp storeOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    IREE::HAL::InterfaceStoreTensorOpOperandAdaptor adaptor(operands);
+    IREE::HAL::InterfaceStoreTensorOp::Adaptor adaptor(operands);
     Value operand = adaptor.operand();
     // If we are just storing the buffer back to itself again, we can trivially
     // remove this op. Otherwise, copy the content from the source buffer to the
@@ -1464,17 +1669,20 @@ void populateHLOToLinalgOnBuffersConversionPatterns(
     MLIRContext *context, OwningRewritePatternList &patterns,
     TensorToBufferMap const &resultTensorToBufferMap) {
   patterns.insert<
-//      ConvOpConversion,
+//                    ConvOpConversion,
+      //        DotOpConversion<DotOperationType::MatrixMatrix,
+      //        linalg::MatmulOp>,
       RiseConvOpConversion,
       RiseDotOpConversion<DotOperationType::MatrixMatrix, linalg::MatmulOp>,
       LinalgOpOnTensorConversion<linalg::GenericOp>,
       LinalgOpOnTensorConversion<linalg::IndexedGenericOp>, PadOpConversion,
-      ReduceOpConversion, ReduceWindowOpConversion, TensorReshapeOpConversion,
-      TorchIndexSelectOpConversion>(context, resultTensorToBufferMap);
+      ReduceOpConversion, ReduceWindowOpConversion, SliceOpConversion,
+      TensorReshapeOpConversion, TorchIndexSelectOpConversion>(
+      context, resultTensorToBufferMap);
   // Reduce region operation conversions.
-  patterns.insert<ReduceRegionXLAOpConversion<xla_hlo::AddOp>,
-                  ReduceRegionXLAOpConversion<xla_hlo::MinOp>,
-                  ReduceRegionXLAOpConversion<xla_hlo::MaxOp>,
+  patterns.insert<ReduceRegionXLAOpConversion<mhlo::AddOp>,
+                  ReduceRegionXLAOpConversion<mhlo::MinOp>,
+                  ReduceRegionXLAOpConversion<mhlo::MaxOp>,
                   ReduceRegionReturnOpConversion>(context);
 }
 
@@ -1497,9 +1705,7 @@ void ConvertHLOToLinalgOnBuffersPass::runOnFunction() {
 
   ConversionTarget target(*context);
   // Make sure all XLA HLO ops are converted to Linalg ops after this pass.
-
-  target.addIllegalDialect<xla_hlo::XlaHloDialect>();
-
+  target.addIllegalDialect<mhlo::MhloDialect>();
   // All Linalg ops should operate on buffers. So hal.interface.*.tensor ops
   // should be gone.
   target.addIllegalOp<IREE::HAL::InterfaceLoadTensorOp,

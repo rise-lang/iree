@@ -19,9 +19,6 @@ name: Synchronize Submodules
 on:
   push:
     branches:
-      - master
-      # This branch doesn't exist yet, but may as part of shifting to a
-      # GitHub-first workflow.
       - google
 
 jobs:
@@ -41,7 +38,7 @@ jobs:
       - name: Committing updates
         if: env.has_diff == 'true'
         run: |
-          git config --local user.email "noreply+action@github.com"
+          git config --local user.email "iree-github-actions-bot@google.com"
           git config --local user.name "Submodule Synchronize Action"
           git commit -am "Synchronize submodules"
       - name: Pushing changes
@@ -50,4 +47,3 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_WRITE_ACCESS_TOKEN }}
           branch: ${{ github.ref }}
-

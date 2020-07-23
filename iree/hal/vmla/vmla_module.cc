@@ -192,21 +192,13 @@ class VMLAModuleState final {
  public:
   VMLAModuleState(iree_allocator_t allocator,
                   kernels::RuntimeState* kernel_state)
-      : allocator_(allocator),
-        interface_(vm::assign_ref(new Interface())),
-        kernel_state_(kernel_state) {}
+      : allocator_(allocator), kernel_state_(kernel_state) {}
 
   ~VMLAModuleState() = default;
-
-  Interface* interface() const { return interface_.get(); }
 
   //===--------------------------------------------------------------------===//
   // vmla.interface.*
   //===--------------------------------------------------------------------===//
-
-  StatusOr<vm::ref<Interface>> InterfaceCurrent() {
-    return vm::retain_ref(interface_);
-  }
 
   StatusOr<uint32_t> InterfaceConst(vm::ref<Interface> interface,
                                     uint32_t offset) {
@@ -490,6 +482,19 @@ class VMLAModuleState final {
   IREE_VMLA_GATHER_OP(GatherX8, uint8_t);
   IREE_VMLA_GATHER_OP(GatherX16, uint16_t);
   IREE_VMLA_GATHER_OP(GatherX32, uint32_t);
+
+#define IREE_VMLA_SCATTER_OP(name, type)                                 \
+  Status name(vm::ref<Buffer> src, iree_vmla_shape_t src_shape,          \
+              vm::ref<Buffer> indices, iree_vmla_shape_t indices_shape,  \
+              vm::ref<Buffer> dst, iree_vmla_shape_t dst_shape) {        \
+    IREE_TRACE_SCOPE0("VMLAModuleState::" #name);                        \
+    return kernels::Scatter::Execute<type>(                              \
+        src->As<type>(), indices->As<int>(), dst->As<type>(), src_shape, \
+        indices_shape, dst_shape);                                       \
+  }
+  IREE_VMLA_SCATTER_OP(ScatterX8, uint8_t);
+  IREE_VMLA_SCATTER_OP(ScatterX16, uint16_t);
+  IREE_VMLA_SCATTER_OP(ScatterX32, uint32_t);
 
 #define IREE_VMLA_BROADCAST_OP(name, type)                        \
   Status name(vm::ref<Buffer> src, iree_vmla_shape_t src_shape,   \
@@ -775,10 +780,6 @@ class VMLAModuleState final {
  private:
   iree_allocator_t allocator_;
 
-  // Shared interface that the command processor uses to pass bindings in during
-  // execution.
-  vm::ref<Interface> interface_;
-
   // NOTE: kernel state must be externally synchronized as it is shared across
   // all contexts using the VMLA module. This is fine in our current design as
   // we only ever execute a single context at a time but if we start to allow
@@ -791,8 +792,6 @@ class VMLAModuleState final {
 //===----------------------------------------------------------------------===//
 
 static const vm::NativeFunction<VMLAModuleState> kVMLAModuleFunctions[] = {
-    vm::MakeNativeFunction("interface.current",
-                           &VMLAModuleState::InterfaceCurrent),
     vm::MakeNativeFunction("interface.const", &VMLAModuleState::InterfaceConst),
     vm::MakeNativeFunction("interface.binding",
                            &VMLAModuleState::InterfaceBinding),
@@ -831,6 +830,9 @@ static const vm::NativeFunction<VMLAModuleState> kVMLAModuleFunctions[] = {
     vm::MakeNativeFunction("gather.x8", &VMLAModuleState::GatherX8),
     vm::MakeNativeFunction("gather.x16", &VMLAModuleState::GatherX16),
     vm::MakeNativeFunction("gather.x32", &VMLAModuleState::GatherX32),
+    vm::MakeNativeFunction("scatter.x8", &VMLAModuleState::ScatterX8),
+    vm::MakeNativeFunction("scatter.x16", &VMLAModuleState::ScatterX16),
+    vm::MakeNativeFunction("scatter.x32", &VMLAModuleState::ScatterX32),
     vm::MakeNativeFunction("tile.x8", &VMLAModuleState::TileX8),
     vm::MakeNativeFunction("tile.x16", &VMLAModuleState::TileX16),
     vm::MakeNativeFunction("tile.x32", &VMLAModuleState::TileX32),
@@ -1004,10 +1006,6 @@ Status ModuleCreate(iree_allocator_t allocator, iree_vm_module_t** out_module) {
   RETURN_IF_ERROR(module->Initialize());
   *out_module = module.release()->interface();
   return OkStatus();
-}
-
-Interface* ModuleStateInterface(iree_vm_module_state_t* module_state) {
-  return reinterpret_cast<VMLAModuleState*>(module_state)->interface();
 }
 
 }  // namespace vmla

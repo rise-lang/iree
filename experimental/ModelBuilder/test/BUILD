@@ -19,6 +19,7 @@ load("//iree:build_defs.oss.bzl", "IREE_DRIVER_MODULES", "PLATFORM_VULKAN_DEPS")
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -31,35 +32,28 @@ iree_lit_test_suite(
     data = [
         # runtime libraries
         "@llvm-project//mlir:tools/libvulkan-runtime-wrappers.so",
-        "@llvm-project//mlir/test/mlir-cpu-runner:libmlir_runner_utils.so",
-        ":runtime-support.so",
+        "runtime-support.so",
         # Tests.
         ":test-dot-prod",
-        ":test-mnist-jit",
-        ":test-simple-jit",
-        ":test-simple-jit-vulkan",
-        ":test-simple-mlir",
-        ":test-vector-transfers-jit",
+        "test-mnist-jit",
+        "test-simple-jit",
+        "test-simple-jit-vulkan",
+        "test-simple-mlir",
+        "test-vector-transfers-jit",
         "test-matmul-vulkan",
+        "test-vec-to-gpu",
         # FileChecker.
         "//iree/tools:IreeFileCheck",
-    ],
-    tags = [
-        "noga",
     ],
 )
 
 cc_binary(
     name = "test-dot-prod",
     srcs = ["TestDotProdJIT.cpp"],
-    tags = [
-        "noga",
-    ],
     deps = [
         "//experimental/ModelBuilder",
         "//experimental/ModelBuilder:ModelRunner",
-        "@llvm-project//llvm:support",
-        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:EDSC",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:SCFTransforms",
@@ -69,15 +63,11 @@ cc_binary(
 cc_binary(
     name = "test-vector-transfers-jit",
     srcs = ["TestVectorTransfersJIT.cpp"],
-    tags = [
-        "noga",
-    ],
     deps = [
         ":runtime-support.so",
         "//experimental/ModelBuilder",
         "//experimental/ModelBuilder:ModelRunner",
-        "@llvm-project//llvm:support",
-        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:EDSC",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:SCFTransforms",
@@ -87,13 +77,9 @@ cc_binary(
 cc_binary(
     name = "test-mnist-jit",
     srcs = ["TestMNISTJIT.cpp"],
-    tags = [
-        "noga",
-    ],
     deps = [
         "//experimental/ModelBuilder",
         "//experimental/ModelBuilder:ModelRunner",
-        "@llvm-project//mlir:AllPassesAndDialects",
         "@llvm-project//mlir:EDSC",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:SCFTransforms",
@@ -105,14 +91,10 @@ cc_binary(
 cc_binary(
     name = "test-simple-jit",
     srcs = ["TestSimpleJIT.cpp"],
-    tags = [
-        "noga",
-    ],
     deps = [
         "//experimental/ModelBuilder",
         "//experimental/ModelBuilder:ModelRunner",
-        "@llvm-project//llvm:support",
-        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:EDSC",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:SCFTransforms",
@@ -122,15 +104,11 @@ cc_binary(
 cc_binary(
     name = "test-simple-jit-vulkan",
     srcs = ["TestSimpleJITVulkan.cpp"],
-    tags = [
-        "noga",
-    ],
     deps = [
         "//experimental/ModelBuilder",
         "//experimental/ModelBuilder:ModelRunner",
         "//iree/base:initializer",
-        "@llvm-project//llvm:support",
-        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Parser",
         "@llvm-project//mlir:SPIRVDialect",
@@ -141,17 +119,14 @@ cc_binary(
 cc_binary(
     name = "test-matmul-vulkan",
     srcs = ["TestMatMulVulkan.cpp"],
-    tags = [
-        "noga",
-    ],
     deps = [
         "//experimental/ModelBuilder",
         "//experimental/ModelBuilder:ModelRunner",
         "//experimental/ModelBuilder:VulkanLaunchWrapper",
         "//iree/base:initializer",
+        "//iree/compiler/Conversion/CodegenUtils",
         "//iree/compiler/Conversion/LinalgToSPIRV",
-        "@llvm-project//llvm:support",
-        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:ExecutionEngine",
         "@llvm-project//mlir:ExecutionEngineUtils",
         "@llvm-project//mlir:GPUToSPIRVTransforms",
@@ -176,15 +151,77 @@ cc_binary(
 )
 
 cc_binary(
-    name = "test-simple-mlir",
-    srcs = ["TestSimpleMLIR.cpp"],
+    name = "test-vec-to-gpu",
+    srcs = ["TestVectorToGPU.cpp"],
     tags = [
         "noga",
     ],
     deps = [
         "//experimental/ModelBuilder",
         "//experimental/ModelBuilder:ModelRunner",
-        "@llvm-project//mlir:AllPassesAndDialects",
+        "//experimental/ModelBuilder:VulkanLaunchWrapper",
+        "//iree/base:initializer",
+        "//iree/compiler/Conversion/CodegenUtils",
+        "//iree/compiler/Conversion/LinalgToSPIRV",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:GPUToVulkanTransforms",
+        "@llvm-project//mlir:GPUTransforms",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LLVMTransforms",
+        "@llvm-project//mlir:LinalgOps",
+        "@llvm-project//mlir:LinalgToLLVM",
+        "@llvm-project//mlir:LinalgTransforms",
+        "@llvm-project//mlir:Parser",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:SPIRVDialect",
+        "@llvm-project//mlir:StandardToSPIRVConversions",
+        "@llvm-project//mlir:TransformUtils",
+        "@llvm-project//mlir:VectorOps",
+        "@llvm-project//mlir:mlir_c_runner_utils",
+        # mlir_runner_utils with iostream needed for printMemRef atm
+        "@llvm-project//mlir:mlir_runner_utils",
+    ] + PLATFORM_VULKAN_DEPS + IREE_DRIVER_MODULES,
+)
+
+cc_binary(
+    name = "bench-matmul-gpu",
+    srcs = ["BenchMatMulVectorGPU.cpp"],
+    tags = [
+        "noga",
+    ],
+    deps = [
+        "//experimental/ModelBuilder",
+        "//experimental/ModelBuilder:ModelRunner",
+        "//experimental/ModelBuilder:VulkanLaunchWrapper",
+        "//iree/base:initializer",
+        "//iree/compiler/Conversion/CodegenUtils",
+        "//iree/compiler/Conversion/LinalgToSPIRV",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:GPUToVulkanTransforms",
+        "@llvm-project//mlir:GPUTransforms",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LLVMTransforms",
+        "@llvm-project//mlir:LinalgOps",
+        "@llvm-project//mlir:LinalgToLLVM",
+        "@llvm-project//mlir:LinalgTransforms",
+        "@llvm-project//mlir:Parser",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:SPIRVDialect",
+        "@llvm-project//mlir:StandardToSPIRVConversions",
+        "@llvm-project//mlir:TransformUtils",
+        "@llvm-project//mlir:VectorOps",
+        "@llvm-project//mlir:mlir_c_runner_utils",
+        # mlir_runner_utils with iostream needed for printMemRef atm
+        "@llvm-project//mlir:mlir_runner_utils",
+    ] + PLATFORM_VULKAN_DEPS + IREE_DRIVER_MODULES,
+)
+
+cc_binary(
+    name = "test-simple-mlir",
+    srcs = ["TestSimpleMLIR.cpp"],
+    deps = [
+        "//experimental/ModelBuilder",
+        "//experimental/ModelBuilder:ModelRunner",
     ],
 )
 
@@ -194,14 +231,10 @@ cc_binary(
 cc_binary(
     name = "bench-matvec-vector-jit",
     srcs = ["BenchMatVecVectorJIT.cpp"],
-    tags = [
-        "noga",
-    ],
     deps = [
         "//experimental/ModelBuilder",
         "//experimental/ModelBuilder:ModelRunner",
-        "@com_google_benchmark//:benchmark:benchmark_main",
-        "@llvm-project//mlir:AllPassesAndDialects",
+        "@com_google_benchmark//:benchmark",
         "@llvm-project//mlir:EDSC",
         "@llvm-project//mlir:IR",
     ],
@@ -211,14 +244,10 @@ cc_binary(
 cc_binary(
     name = "bench-matmul-vector-jit",
     srcs = ["BenchMatMulVectorJIT.cpp"],
-    tags = [
-        "noga",
-    ],
     deps = [
         "//experimental/ModelBuilder",
         "//experimental/ModelBuilder:ModelRunner",
-        "@com_google_benchmark//:benchmark:benchmark_main",
-        "@llvm-project//mlir:AllPassesAndDialects",
+        "@com_google_benchmark//:benchmark",
         "@llvm-project//mlir:EDSC",
         "@llvm-project//mlir:IR",
     ],
@@ -229,14 +258,10 @@ cc_binary(
     name = "bench-matmul-vector-column-major-llvm-intrinsics-jit",
     srcs = ["BenchMatMulVectorColumnMajorLLVMIntrinsicsJIT.cpp"],
     copts = ["-O3"],
-    tags = [
-        "noga",
-    ],
     deps = [
         "//experimental/ModelBuilder",
         "//experimental/ModelBuilder:ModelRunner",
-        "@com_google_benchmark//:benchmark:benchmark_main",
-        "@llvm-project//mlir:AllPassesAndDialects",
+        "@com_google_benchmark//:benchmark",
         "@llvm-project//mlir:EDSC",
         "@llvm-project//mlir:IR",
     ],

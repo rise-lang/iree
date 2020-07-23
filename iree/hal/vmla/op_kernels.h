@@ -147,6 +147,14 @@ struct Gather {
                         const int32_t dim, const int32_t batch_dims);
 };
 
+struct Scatter {
+  template <typename T>
+  static Status Execute(absl::Span<const T> src_buffer,
+                        absl::Span<const int32_t> indices_buffer,
+                        absl::Span<T> dst_buffer, ShapeSpan src_shape,
+                        ShapeSpan indices_shape, ShapeSpan dst_shape);
+};
+
 struct Reverse {
   template <typename T>
   static Status Execute(absl::Span<const T> src_buffer,
@@ -442,6 +450,6 @@ struct PoolingMax {
 }  // namespace iree
 
 #include "iree/hal/vmla/op_kernels_generic.h"  // IWYU pragma: export
-#include "iree/hal/vmla/op_kernels_ruy.h"      // IWYU pragma: export
+#include "iree/hal/vmla/op_kernels_ruy.h"  // IWYU pragma: export
 
 #endif  // IREE_HAL_VMLA_OP_KERNELS_H_

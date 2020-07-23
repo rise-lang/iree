@@ -29,7 +29,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/Utils.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 
 #define DEBUG_TYPE "iree-dispatch"
 
@@ -197,9 +197,10 @@ bool isDispatchRegionMergable(DispatchRegionOp &regionOp) {
   for (auto &block : regionOp.body().getBlocks()) {
     for (auto &op : block) {
       // TODO(b/144530470): replace with tablegen attributes/interfaces.
-      if (isa<xla_hlo::ReduceOp>(op) || isa<xla_hlo::DotOp>(op) ||
-          isa<xla_hlo::ConvOp>(op) || isa<xla_hlo::ReduceWindowOp>(op) ||
-          isa<xla_hlo::PadOp>(op)) {
+      if (isa<mhlo::ReduceOp>(op) || isa<mhlo::DotOp>(op) ||
+          isa<mhlo::ConvOp>(op) || isa<mhlo::ReduceWindowOp>(op) ||
+          isa<mhlo::PadOp>(op) || isa<mhlo::TorchIndexSelectOp>(op) ||
+          isa<mhlo::SliceOp>(op) || isa<mhlo::ConcatenateOp>(op)) {
         return false;
       }
     }

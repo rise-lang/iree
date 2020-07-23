@@ -21,6 +21,7 @@
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/StandardTypes.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/InitAllDialects.h"
 
 using namespace mlir;
 using namespace mlir::edsc;
@@ -28,6 +29,18 @@ using namespace mlir::edsc::ops;
 using namespace mlir::edsc::intrinsics;
 
 thread_local MLIRContext mlir::ModelBuilder::ctx;
+
+void ModelBuilder::registerAllDialects() {
+  registerDialect<AffineDialect>();
+  registerDialect<gpu::GPUDialect>();
+  registerDialect<LLVM::LLVMDialect>();
+  registerDialect<linalg::LinalgDialect>();
+  registerDialect<scf::SCFDialect>();
+  registerDialect<omp::OpenMPDialect>();
+  registerDialect<spirv::SPIRVDialect>();
+  registerDialect<StandardOpsDialect>();
+  registerDialect<vector::VectorDialect>();
+}
 
 mlir::ModelBuilder::ModelBuilder()
     : OpBuilder(&ctx),
@@ -70,8 +83,16 @@ FuncOp mlir::ModelBuilder::makeFunction(
 
 static spirv::TargetEnvAttr getTargetEnv(MLIRContext *context) {
   auto triple = spirv::VerCapExtAttr::get(
-      spirv::Version::V_1_0, {spirv::Capability::Shader},
-      {spirv::Extension::SPV_KHR_storage_buffer_storage_class}, context);
+      spirv::Version::V_1_0,
+      {spirv::Capability::Shader, spirv::Capability::CooperativeMatrixNV,
+       spirv::Capability::Int8, spirv::Capability::Float16,
+       spirv::Capability::StorageBuffer8BitAccess,
+       spirv::Capability::Float16Buffer},
+      {spirv::Extension::SPV_KHR_storage_buffer_storage_class,
+       spirv::Extension::SPV_NV_cooperative_matrix,
+       spirv::Extension::SPV_KHR_8bit_storage,
+       spirv::Extension::SPV_KHR_16bit_storage},
+      context);
   return spirv::TargetEnvAttr::get(triple,
                                    spirv::getDefaultResourceLimits(context));
 }
@@ -229,7 +250,7 @@ MLIRFuncOpConfig &MLIRFuncOpConfig::setPreferAvx512(bool v) {
   return *this;
 }
 MLIRFuncOpConfig &MLIRFuncOpConfig::setTargetCpu(StringRef s) {
-  targetCpu = s;
+  targetCpu = std::string(s);
   return *this;
 }
 MLIRFuncOpConfig &MLIRFuncOpConfig::setDeclOnly(bool v) {
@@ -283,14 +304,14 @@ SmallVector<Value, 4> mlir::edsc::extensions::operator+(ValueRange a,
 }
 SmallVector<Value, 4> mlir::edsc::extensions::std_max(ValueRange a,
                                                       ValueRange b) {
-  using edsc::op::operator<;
-  auto fun = [](Value va, Value vb) { return (va < vb) ? vb : va; };
+  using edsc::op::slt;
+  auto fun = [](Value va, Value vb) { return slt(va, vb) ? vb : va; };
   return valueRangeOperatorImpl(fun, a, b);
 }
 SmallVector<Value, 4> mlir::edsc::extensions::std_min(ValueRange a,
                                                       ValueRange b) {
-  using edsc::op::operator<;
-  auto fun = [](Value va, Value vb) { return (va < vb) ? va : vb; };
+  using edsc::op::slt;
+  auto fun = [](Value va, Value vb) { return slt(va, vb) ? va : vb; };
   return valueRangeOperatorImpl(fun, a, b);
 }
 SmallVector<Value, 4> mlir::edsc::extensions::affine_max(ValueRange a,

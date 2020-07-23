@@ -60,6 +60,10 @@ static LogicalResult importTfSavedModelGlobalTensorsToIREEFlow(
   OpBuilder globalBuilder(module.getBodyRegion());
   SymbolTable symbolTable(module);
 
+  if (auto sessionInitializer = tf_saved_model::GetSessionInitializerOp(module))
+    return sessionInitializer.emitError()
+           << "Session initializer is not supported yet";
+
   DenseMap<StringRef, std::string> symNameToFlowSymName;
   for (auto globalTensor : module.getOps<tf_saved_model::GlobalTensorOp>()) {
     auto exportedNames = tf_saved_model::GetExportedNames(globalTensor);
@@ -89,8 +93,8 @@ static LogicalResult importTfSavedModelGlobalTensorsToIREEFlow(
     OpBuilder builder(func.getBody());
     SmallVector<Value, 8> typeConversionWorklist;
     for (int i = 0, e = func.getNumArguments(); i < e; i++) {
-      auto globalTensor =
-          tf_saved_model::LookupBoundInput(func, i, symbolTable);
+      auto globalTensor = tf_saved_model::LookupBoundInputOfType<
+          tf_saved_model::GlobalTensorOp>(func, i, symbolTable);
       if (!globalTensor) {
         continue;
       }

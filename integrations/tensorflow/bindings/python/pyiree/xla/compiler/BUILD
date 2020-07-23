@@ -27,6 +27,7 @@ load(
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -37,7 +38,6 @@ iree_py_library(
     ],
     srcs_version = "PY3",
     tags = [
-        "noga",
         "nokokoro",
     ],
     deps = [
@@ -56,7 +56,6 @@ iree_py_extension(
     features = PYBIND_FEATURES,
     linkstatic = 1,
     tags = [
-        "noga",
         "nokokoro",
     ],
     win_def_file = "export.def",
@@ -76,13 +75,12 @@ pybind_cc_library(
         "register_xla.h",
     ],
     tags = [
-        "noga",
         "nokokoro",
     ],
     deps = [
         "//bindings/python/pyiree/common",
         "//bindings/python/pyiree/compiler:compiler_library",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@org_tensorflow//tensorflow/compiler/mlir/xla:hlo_module_importer",
         "@org_tensorflow//tensorflow/compiler/xla/client:xla_computation",
@@ -94,7 +92,6 @@ iree_py_test(
     srcs = ["xla_module_proto_test.py"],
     python_version = "PY3",
     tags = [
-        "noga",
         "nokokoro",
     ],
     deps = INTREE_TENSORFLOW_PY_DEPS + NUMPY_DEPS + [

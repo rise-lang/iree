@@ -15,7 +15,7 @@
 //===- XLAToLinalgOnTensors.cpp - Pass to convert XLA to Linalg on tensors-===//
 //
 // Pass to convert from XLA to linalg on tensers. Uses the patterns from
-// tensorflow/compiler/mlir/xla/transforms/xla_legalize_to_linalg.cc along with
+// tensorflow/compiler/mlir/xla/transforms/legalize_to_linalg.cc along with
 // some IREE specific patterns.
 //
 //===----------------------------------------------------------------------===//
@@ -35,8 +35,8 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/Passes.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
-#include "tensorflow/compiler/mlir/xla/transforms/rewriters.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/transforms/rewriters.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -54,12 +54,12 @@ struct ConvertHLOToLinalgOnTensorsPass
       return isa<linalg::LinalgOp>(op.getOperation()->getParentOp());
     });
     // Don't convert the body of reduction ops.
-    target.addDynamicallyLegalDialect<xla_hlo::XlaHloDialect>(
+    target.addDynamicallyLegalDialect<mhlo::MhloDialect>(
         Optional<ConversionTarget::DynamicLegalityCallbackFn>(
             [](Operation* op) {
               auto parentOp = op->getParentRegion()->getParentOp();
-              return isa<xla_hlo::ReduceOp>(parentOp) ||
-                     isa<xla_hlo::ReduceWindowOp>(parentOp);
+              return isa<mhlo::ReduceOp>(parentOp) ||
+                     isa<mhlo::ReduceWindowOp>(parentOp);
             }));
     // Let the rest fall through.
     target.markUnknownOpDynamicallyLegal([](Operation*) { return true; });
@@ -74,7 +74,7 @@ struct ConvertHLOToLinalgOnTensorsPass
 
 void populateHLOToLinalgOnTensorsConversionPatterns(
     MLIRContext* context, OwningRewritePatternList& patterns) {
-  xla_hlo::populateHLOToLinalgConversionPattern(context, &patterns);
+  mhlo::populateHLOToLinalgConversionPattern(context, &patterns);
 }
 
 std::unique_ptr<OperationPass<FuncOp>> createHLOToLinalgOnTensorsPass() {

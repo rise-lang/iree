@@ -2,6 +2,7 @@ load("//iree/tools:compilation.bzl", "iree_bytecode_module")
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -28,7 +29,6 @@ cc_library(
         "//iree/vm:ref",
         "//iree/vm:ref_cc",
         "//iree/vm:stack",
-        "//iree/vm:types",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:span",
@@ -55,7 +55,6 @@ cc_test(
         "//iree/vm:ref",
         "//iree/vm:ref_cc",
         "//iree/vm:stack",
-        "//iree/vm:types",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/strings",
         "@com_google_benchmark//:benchmark",

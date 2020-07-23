@@ -62,14 +62,14 @@ class ElideTieShapeOp : public OpConversionPattern<Shape::TieShapeOp> {
   LogicalResult matchAndRewrite(
       Shape::TieShapeOp op, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    rewriter.replaceOp(op, op.operand());
+    rewriter.replaceOp(op, operands[0]);
     return success();
   }
 };
 
 // VMLA -> VM import conversion base for generic ops.
 // Handles signatures with integers, VM types, or simple buffers.
-template <typename T, typename Adaptor = typename T::OperandAdaptor>
+template <typename T, typename Adaptor = typename T::Adaptor>
 class VMLAImportOpConversion : public OpConversionPattern<T> {
  public:
   VMLAImportOpConversion(MLIRContext *context, SymbolTable &importSymbols,
@@ -281,6 +281,7 @@ void populateVMLAToVMPatterns(MLIRContext *context, SymbolTable &importSymbols,
   VMLA_SIZED_IMPORT_OP(IREE::VMLA::ReverseOp, "vmla.reverse");
   VMLA_SIZED_IMPORT_OP(IREE::VMLA::PadOp, "vmla.pad");
   VMLA_SIZED_IMPORT_OP(IREE::VMLA::GatherOp, "vmla.gather");
+  VMLA_SIZED_IMPORT_OP(IREE::VMLA::ScatterOp, "vmla.scatter");
   VMLA_SIZED_IMPORT_OP(IREE::VMLA::BroadcastOp, "vmla.broadcast");
   VMLA_SIZED_IMPORT_OP(IREE::VMLA::TileOp, "vmla.tile");
 
@@ -365,7 +366,7 @@ class ConvertVMLAToVMPass
     Shape::populateFoldConversionPatterns(&getContext(), conversionPatterns);
 
     if (failed(applyPartialConversion(outerModuleOp, conversionTarget,
-                                      conversionPatterns, &typeConverter))) {
+                                      conversionPatterns))) {
       outerModuleOp.emitError() << "conversion to vm.module failed";
       return signalPassFailure();
     }

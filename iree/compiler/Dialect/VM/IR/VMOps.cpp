@@ -696,6 +696,58 @@ void ConstRefRodataOp::build(OpBuilder &builder, OperationState &result,
 }
 
 //===----------------------------------------------------------------------===//
+// Lists
+//===----------------------------------------------------------------------===//
+
+static LogicalResult verifyListGetRefOp(ListGetRefOp &op) {
+  auto listType = op.list()
+                      .getType()
+                      .cast<IREE::VM::RefType>()
+                      .getObjectType()
+                      .cast<IREE::VM::ListType>();
+  auto elementType = listType.getElementType();
+  auto resultType = op.result().getType();
+  if (elementType.isa<IREE::VM::RefType>() !=
+      resultType.isa<IREE::VM::RefType>()) {
+    // Attempting to go between a primitive type and ref type.
+    return op.emitError() << "cannot convert between list type " << elementType
+                          << " and result type " << resultType;
+  } else if (auto refType = elementType.dyn_cast<IREE::VM::RefType>()) {
+    if (!refType.getObjectType().isa<IREE::VM::OpaqueType>() &&
+        elementType != resultType) {
+      // List has a concrete type, verify it matches.
+      return op.emitError() << "list contains " << elementType
+                            << " that cannot be accessed as " << resultType;
+    }
+  }
+  return success();
+}
+
+static LogicalResult verifyListSetRefOp(ListSetRefOp &op) {
+  auto listType = op.list()
+                      .getType()
+                      .cast<IREE::VM::RefType>()
+                      .getObjectType()
+                      .cast<IREE::VM::ListType>();
+  auto elementType = listType.getElementType();
+  auto valueType = op.value().getType();
+  if (elementType.isa<IREE::VM::RefType>() !=
+      valueType.isa<IREE::VM::RefType>()) {
+    // Attempting to go between a primitive type and ref type.
+    return op.emitError() << "cannot convert between list type " << elementType
+                          << " and value type " << valueType;
+  } else if (auto refType = elementType.dyn_cast<IREE::VM::RefType>()) {
+    if (!refType.getObjectType().isa<IREE::VM::OpaqueType>() &&
+        elementType != valueType) {
+      // List has a concrete type, verify it matches.
+      return op.emitError() << "list contains " << elementType
+                            << " that cannot be mutated as " << valueType;
+    }
+  }
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // Assignment
 //===----------------------------------------------------------------------===//
 
@@ -978,7 +1030,8 @@ Optional<MutableOperandRange> CondBranchOp::getMutableSuccessorOperands(
                             : falseDestOperandsMutable();
 }
 
-static LogicalResult verifyFailOp(FailOp op) {
+template <typename T>
+static LogicalResult verifyFailOp(T op) {
   APInt status;
   if (matchPattern(op.status(), m_ConstantInt(&status))) {
     if (status == 0) {
@@ -986,6 +1039,51 @@ static LogicalResult verifyFailOp(FailOp op) {
     }
   }
   return success();
+}
+
+static ParseResult parseCondFailOp(OpAsmParser &parser,
+                                   OperationState *result) {
+  // First operand is either 'condition' or 'status', both i32.
+  OpAsmParser::OperandType condition;
+  if (failed(parser.parseOperand(condition))) {
+    return failure();
+  }
+
+  // First try looking for an operand after a comma. If no operand, keep track
+  // of the already parsed comma to avoid checking for a comma later on.
+  bool trailingComma = false;
+  OpAsmParser::OperandType status = condition;
+  if (succeeded(parser.parseComma()) &&
+      !parser.parseOptionalOperand(status).hasValue()) {
+    trailingComma = true;
+  }
+
+  StringAttr messageAttr;
+  if ((trailingComma || succeeded(parser.parseComma())) &&
+      failed(
+          parser.parseAttribute(messageAttr, "message", result->attributes))) {
+    return failure();
+  }
+
+  Type operandType = IntegerType::get(32, result->getContext());
+  if (failed(parser.resolveOperand(condition, operandType, result->operands)) ||
+      failed(parser.resolveOperand(status, operandType, result->operands))) {
+    return failure();
+  }
+
+  return parser.parseOptionalAttrDict(result->attributes);
+}
+
+static void printCondFailOp(OpAsmPrinter &p, CondFailOp op) {
+  p << op.getOperationName() << ' ';
+  if (op.condition() != op.status()) {
+    p << op.condition() << ", ";
+  }
+  p << op.status();
+  if (op.message().hasValue()) {
+    p << ", \"" << op.message().getValue() << "\"";
+  }
+  p.printOptionalAttrDict(op.getAttrs(), /*elidedAttrs=*/{"message"});
 }
 
 //===----------------------------------------------------------------------===//

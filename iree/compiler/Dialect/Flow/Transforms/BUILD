@@ -14,6 +14,7 @@
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -54,19 +55,20 @@ cc_library(
         "//iree/compiler/Dialect/Shape/Transforms",
         "//iree/compiler/Dialect/Shape/Utils:TypeConversion",
         "//iree/compiler/Utils",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:ShapeTransforms",
         "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:TransformUtils",
         "@llvm-project//mlir:Transforms",
-        "@org_tensorflow//tensorflow/compiler/mlir/xla:chlo_legalize_to_hlo",
-        "@org_tensorflow//tensorflow/compiler/mlir/xla:hlo",
-        "@org_tensorflow//tensorflow/compiler/mlir/xla:xla_legalize_control_flow",
-        "@org_tensorflow//tensorflow/compiler/mlir/xla:xla_lower",
-        "@org_tensorflow//tensorflow/compiler/mlir/xla:xla_materialize_broadcasts",
-        "@org_tensorflow//tensorflow/compiler/mlir/xla:xla_unfuse_batch_norm",
+        "@org_tensorflow//tensorflow/compiler/mlir/hlo",
+        "@org_tensorflow//tensorflow/compiler/mlir/hlo:chlo_legalize_to_hlo",
+        "@org_tensorflow//tensorflow/compiler/mlir/hlo:legalize_control_flow",
+        "@org_tensorflow//tensorflow/compiler/mlir/hlo:materialize_broadcasts",
+        "@org_tensorflow//tensorflow/compiler/mlir/hlo:mhlo_to_mhlo_lowering_patterns",
+        "@org_tensorflow//tensorflow/compiler/mlir/hlo:unfuse_batch_norm",
     ],
 )

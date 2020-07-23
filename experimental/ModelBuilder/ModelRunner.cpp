@@ -14,7 +14,6 @@
 
 #include "experimental/ModelBuilder/ModelRunner.h"
 
-#include "experimental/ModelBuilder/ModelBuilder.h"
 #include "llvm/Support/TargetSelect.h"
 #include "mlir/Conversion/GPUToSPIRV/ConvertGPUToSPIRVPass.h"
 #include "mlir/Conversion/GPUToVulkan/ConvertGPUToVulkanPass.h"
@@ -53,9 +52,9 @@ extern Pass* createLowerMatrixIntrinsicsPass();
 
 void mlir::ModelRunner::compile(CompilationOptions compilationOptions,
                                 llvm::ArrayRef<const std::string> runtime) {
-  // Lower vector operations progressively into more elementary
-  // vector operations before running the regular compiler passes.
-  {
+  if (target == Target::CPUTarget) {
+    // Lower vector operations progressively into more elementary
+    // vector operations before running the regular compiler passes.
     mlir::OwningRewritePatternList patterns;
     mlir::vector::populateVectorSlicesLoweringPatterns(patterns,
                                                        module->getContext());
@@ -81,8 +80,10 @@ void mlir::ModelRunner::compile(CompilationOptions compilationOptions,
   if (target == Target::CPUTarget) {
     // TODO(ntv): Looking up the pass by name fails quite surprisingly. Just
     // build the pass to get its ID to look up the PassInfo.
+    std::unique_ptr<llvm::Pass> owningLowerMatrixIntrinsicsPass(
+        llvm::createLowerMatrixIntrinsicsPass());
     const llvm::PassInfo* lowerMatrixIntrinsics = llvm::Pass::lookupPassInfo(
-        llvm::createLowerMatrixIntrinsicsPass()->getPassID());
+        owningLowerMatrixIntrinsicsPass->getPassID());
     assert(lowerMatrixIntrinsics);
     llvmPasses.push_back(lowerMatrixIntrinsics);
   }

@@ -6,12 +6,13 @@ Notes to those updating this guide:
     * This document should be __simple__ and cover essential items only.
       Notes for optional components should go in separate files.
 
-    * This document parallels getting_started_linux_cmake.md.
+    * This document parallels getting_started_linux_cmake.md and
+      getting_started_macos_cmake.md
       Please keep them in sync.
 -->
 
 This guide walks through building the core compiler and runtime parts of IREE
-from source. Auxilary components like the Python bindings and Vulkan driver are
+from source. Auxiliary components like the Python bindings and Vulkan driver are
 documented separately, as they require further setup.
 
 ## Prerequisites
@@ -31,7 +32,7 @@ Install CMake version >= 3.13 from the
 [Ninja](https://ninja-build.org/) is a fast build system that you can use as a
 CMake generator. Download it from the
 [releases page](https://github.com/ninja-build/ninja/releases), extract
-somewhere, and it to your PATH.
+somewhere, and add it to your PATH.
 
 ### Install a Compiler
 
@@ -74,8 +75,9 @@ Configure:
 
 > Tip:<br>
 > &nbsp;&nbsp;&nbsp;&nbsp;The root
-> [CMakeLists.txt](https://github.com/google/iree/blob/master/CMakeLists.txt) file
-> has options for configuring which parts of the project to enable.
+> [CMakeLists.txt](https://github.com/google/iree/blob/main/CMakeLists.txt)
+> file has options for configuring which parts of the project to enable.<br>
+> &nbsp;&nbsp;&nbsp;&nbsp;These are further documented in [CMake Options and Variables](cmake_options_and_variables.md).
 
 Build all targets:
 
@@ -95,7 +97,7 @@ Check out the contents of the 'tools' build directory:
 ```
 
 Translate a
-[MLIR file](https://github.com/google/iree/blob/master/iree/tools/test/simple.mlir)
+[MLIR file](https://github.com/google/iree/blob/main/iree/tools/test/simple.mlir)
 and execute a function in the compiled module:
 
 ```powershell

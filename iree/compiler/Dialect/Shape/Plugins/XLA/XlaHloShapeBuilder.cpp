@@ -21,7 +21,7 @@
 #include "llvm/ADT/Optional.h"
 #include "mlir/IR/StandardTypes.h"
 #include "mlir/IR/Value.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 
 using llvm::None;
 using llvm::Optional;
@@ -30,7 +30,7 @@ using llvm::SmallVector;
 using namespace mlir::iree_compiler::Shape;
 
 namespace mlir {
-namespace xla_hlo {
+namespace mhlo {
 namespace {
 
 template <typename HloOp>
@@ -338,10 +338,9 @@ void populateXlaHloCustomOpShapeBuilder(CustomOpShapeBuilderList &builders) {
       rewriteShapexRankedBroadcastInDim);
   b.insertOpRankedShapeBuilder<ReduceOp>(rewriteReduce);
   b.insertOpRankedShapeBuilder<TransposeOp>(rewriteTranspose);
-  b.insertOpRankedShapeBuilder<xla_hlo::DotGeneralOp>(rewriteDotGeneral);
-  b.insertOpRankedShapeBuilder<xla_hlo::DynamicReshapeOp>(
-      rewriteDynamicReshape);
+  b.insertOpRankedShapeBuilder<mhlo::DotGeneralOp>(rewriteDotGeneral);
+  b.insertOpRankedShapeBuilder<mhlo::DynamicReshapeOp>(rewriteDynamicReshape);
 }
 
-}  // namespace xla_hlo
+}  // namespace mhlo
 }  // namespace mlir

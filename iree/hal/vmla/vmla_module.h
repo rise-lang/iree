@@ -28,7 +28,6 @@
 #include "iree/base/status.h"
 #include "iree/vm/api.h"
 #include "iree/vm/module_abi_cc.h"
-#include "iree/vm/types.h"
 
 namespace iree {
 namespace hal {
@@ -129,8 +128,6 @@ class Interface final : public RefObject<Interface> {
 Status ModuleRegisterTypes();
 
 Status ModuleCreate(iree_allocator_t allocator, iree_vm_module_t** out_module);
-
-Interface* ModuleStateInterface(iree_vm_module_state_t* module_state);
 
 }  // namespace vmla
 }  // namespace hal

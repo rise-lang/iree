@@ -18,6 +18,7 @@ load("//iree/tools:compilation.bzl", "iree_bytecode_module")
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -42,7 +43,6 @@ cc_binary(
     }),
     tags = [
         "manual",
-        "noga",
         "nokokoro",
     ],
     deps = [

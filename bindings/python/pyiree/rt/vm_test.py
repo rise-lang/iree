@@ -21,12 +21,25 @@ from pyiree import compiler
 from pyiree import rt
 
 
+def create_add_scalar_module():
+  ctx = compiler.Context()
+  input_module = ctx.parse_asm("""
+    func @add_scalar(%arg0: i32, %arg1: i32) -> i32 attributes { iree.module.export } {
+      %0 = addi %arg0, %arg1 : i32
+      return %0 : i32
+    }
+    """)
+  binary = input_module.compile()
+  m = rt.VmModule.from_flatbuffer(binary)
+  return m
+
+
 def create_simple_static_mul_module():
   ctx = compiler.Context()
   input_module = ctx.parse_asm("""
     func @simple_mul(%arg0: tensor<4xf32>, %arg1: tensor<4xf32>) -> tensor<4xf32>
           attributes { iree.module.export } {
-        %0 = "xla_hlo.multiply"(%arg0, %arg1) {name = "mul.1"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
+        %0 = "mhlo.multiply"(%arg0, %arg1) {name = "mul.1"} : (tensor<4xf32>, tensor<4xf32>) -> tensor<4xf32>
         return %0 : tensor<4xf32>
     }
     """)
@@ -42,7 +55,7 @@ def create_simple_dynamic_abs_module():
   input_module = ctx.parse_asm("""
     func @simple_mul(%arg0: tensor<?x?xf32>) -> tensor<?x?xf32>
           attributes { iree.module.export } {
-        %0 = "xla_hlo.abs"(%arg0) : (tensor<?x?xf32>) -> tensor<?x?xf32>
+        %0 = "mhlo.abs"(%arg0) : (tensor<?x?xf32>) -> tensor<?x?xf32>
         return %0 : tensor<?x?xf32>
     }
     """)
@@ -102,6 +115,26 @@ class VmTest(absltest.TestCase):
     print(instance)
     context = rt.VmContext(instance, modules=[self.hal_module, m])
     print(context)
+
+  def test_add_scalar(self):
+    m = create_add_scalar_module()
+    instance = rt.VmInstance()
+    context = rt.VmContext(instance, modules=[self.hal_module, m])
+    f = m.lookup_function("add_scalar")
+    abi = context.create_function_abi(self.device, self.htf, f)
+    print("INVOKING:", abi)
+    arg0 = np.array([1., 2., 3., 4.], dtype=np.float32)
+    arg1 = np.array([4., 5., 6., 7.], dtype=np.float32)
+    inputs = abi.raw_pack_inputs((5, 6))
+    print("INPUTS:", inputs)
+    allocated_results = abi.allocate_results(inputs, static_alloc=False)
+    print("ALLOCATED RESULTS:", allocated_results)
+    print("--- INVOKE:")
+    context.invoke(f, inputs, allocated_results)
+    print("--- DONE.")
+    results = abi.raw_unpack_results(allocated_results)
+    print("RESULTS:", results)
+    self.assertEqual(results[0], 11)
 
   def test_synchronous_dynamic_shape_invoke_function(self):
     m = create_simple_dynamic_abs_module()

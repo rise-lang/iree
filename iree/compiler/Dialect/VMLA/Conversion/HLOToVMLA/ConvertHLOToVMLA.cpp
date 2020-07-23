@@ -22,6 +22,7 @@
 #include "iree/compiler/Dialect/VMLA/IR/VMLADialect.h"
 #include "iree/compiler/Dialect/VMLA/IR/VMLAOps.h"
 #include "iree/compiler/Dialect/VMLA/IR/VMLATypes.h"
+#include "llvm/ADT/STLExtras.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
@@ -32,8 +33,8 @@
 #include "mlir/IR/StandardTypes.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
-#include "tensorflow/compiler/mlir/xla/transforms/rewriters.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/transforms/rewriters.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -60,7 +61,7 @@ struct IdentityOpConversion : public OpConversionPattern<SRC> {
   LogicalResult matchAndRewrite(
       SRC srcOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    // xla_hlo::DynamicReshape has multiple operands, so we cannot just say
+    // mhlo::DynamicReshape has multiple operands, so we cannot just say
     // `getOperand()`. But `getOperand(0)` doesn't work for the other
     // single-operand ops. So use the raw Operation to get the operand.
     if (srcOp.getOperation()->getOperand(0).hasOneUse()) {
@@ -82,7 +83,7 @@ struct IdentityOpConversion : public OpConversionPattern<SRC> {
 // Converts a shapex.ranked_broadcast_in_dim op to either a broadcast or a tile
 // depending on the input shape.
 //
-// We assume that xla_hlo.broadcast_in_dim and xla_hlo.dynamic_broadcast_in_dim
+// We assume that mhlo.broadcast_in_dim and mhlo.dynamic_broadcast_in_dim
 // have been legalized into that op.
 //
 // Note that shapex.ranked_broadcast_in_dim is not strictly speaking an HLO op,
@@ -143,9 +144,9 @@ struct BroadcastInDimOpConversion
   TypeConverter &typeConverter;
 };
 
-struct CanonicalizeBroadcastOp : public OpRewritePattern<xla_hlo::BroadcastOp> {
+struct CanonicalizeBroadcastOp : public OpRewritePattern<mhlo::BroadcastOp> {
   using OpRewritePattern::OpRewritePattern;
-  LogicalResult matchAndRewrite(xla_hlo::BroadcastOp op,
+  LogicalResult matchAndRewrite(mhlo::BroadcastOp op,
                                 PatternRewriter &rewriter) const override {
     SmallVector<int64_t, 6> broadcastDimensions;
     RankedTensorType inputType =
@@ -163,7 +164,7 @@ struct CanonicalizeBroadcastOp : public OpRewritePattern<xla_hlo::BroadcastOp> {
                                         rewriter.getIntegerType(64));
       return DenseIntElementsAttr::get(type, integers);
     };
-    rewriter.replaceOpWithNewOp<xla_hlo::BroadcastInDimOp>(
+    rewriter.replaceOpWithNewOp<mhlo::BroadcastInDimOp>(
         op, op.getType(), op.getOperand(),
         make1DElementsAttr(broadcastDimensions));
     return success();
@@ -172,12 +173,12 @@ struct CanonicalizeBroadcastOp : public OpRewritePattern<xla_hlo::BroadcastOp> {
 
 // Converts a concat into a set of copies into the destination buffer.
 struct ConcatenateOpConversion
-    : public OpConversionPattern<xla_hlo::ConcatenateOp> {
+    : public OpConversionPattern<mhlo::ConcatenateOp> {
   ConcatenateOpConversion(MLIRContext *context, TypeConverter &typeConverter)
       : OpConversionPattern(context), typeConverter(typeConverter) {}
 
   LogicalResult matchAndRewrite(
-      xla_hlo::ConcatenateOp srcOp, ArrayRef<Value> operands,
+      mhlo::ConcatenateOp srcOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
     auto zero = rewriter.createOrFold<mlir::ConstantIndexOp>(srcOp.getLoc(), 0);
 
@@ -223,16 +224,16 @@ struct ConcatenateOpConversion
 // Lowers a subset of gathers along axis 0 that are really just a slice and
 // reshape.
 // TODO(ataei): Move this to vmla.gather lowering.
-struct GatherOpConversion : public OpConversionPattern<xla_hlo::GatherOp> {
+struct GatherOpConversion : public OpConversionPattern<mhlo::GatherOp> {
   GatherOpConversion(MLIRContext *context, TypeConverter &typeConverter)
       : OpConversionPattern(context), typeConverter(typeConverter) {}
 
   // TODO(gcmn): This only handles a minimal number of cases. When XLA
   // redefines gather to be simpler, lower it properly.
   LogicalResult matchAndRewrite(
-      xla_hlo::GatherOp gatherOp, ArrayRef<Value> operandValues,
+      mhlo::GatherOp gatherOp, ArrayRef<Value> operandValues,
       ConversionPatternRewriter &rewriter) const override {
-    xla_hlo::GatherOpOperandAdaptor operands(operandValues);
+    mhlo::GatherOp::Adaptor operands(operandValues);
     auto dimension_numbers = gatherOp.dimension_numbers();
     if (dimension_numbers.index_vector_dim().getValue().getSExtValue() != 0) {
       gatherOp.emitRemark()
@@ -347,12 +348,12 @@ struct GatherOpConversion : public OpConversionPattern<xla_hlo::GatherOp> {
 };
 
 // Converts a static slice op to a copy (if the source must be preserved).
-struct SliceOpConversion : public OpConversionPattern<xla_hlo::SliceOp> {
+struct SliceOpConversion : public OpConversionPattern<mhlo::SliceOp> {
   SliceOpConversion(MLIRContext *context, TypeConverter &typeConverter)
       : OpConversionPattern(context), typeConverter(typeConverter) {}
 
   LogicalResult matchAndRewrite(
-      xla_hlo::SliceOp srcOp, ArrayRef<Value> operands,
+      mhlo::SliceOp srcOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
     auto isNotOne = [](APInt stride) { return stride != 1; };
     if (llvm::any_of(srcOp.strides(), isNotOne)) {
@@ -398,16 +399,155 @@ struct SliceOpConversion : public OpConversionPattern<xla_hlo::SliceOp> {
   TypeConverter &typeConverter;
 };
 
+// This lowering converts a subset of the XLA ScatterOp to a VMLA equivalent.
+// If attempts to handle the simplest case with updates along a single preceding
+// batch dimension and support both scattered updates per-element and per-slice.
+// It does not support swizzling / reordering slices.
+struct ScatterOpConversion : public OpConversionPattern<mhlo::ScatterOp> {
+  ScatterOpConversion(MLIRContext *context, TypeConverter &typeConverter)
+      : OpConversionPattern(context), typeConverter(typeConverter) {}
+
+  LogicalResult matchAndRewrite(
+      mhlo::ScatterOp scatterOp, ArrayRef<Value> operands,
+      ConversionPatternRewriter &rewriter) const override {
+    auto dimension_numbers = scatterOp.scatter_dimension_numbers();
+    int rank = scatterOp.getType().cast<ShapedType>().getRank();
+
+    // We should only update along the upper most batch dimension.
+    if (dimension_numbers.index_vector_dim().getValue().getSExtValue() != 1) {
+      scatterOp.emitRemark()
+          << "couldn't lower scatter with index_vector_dim != 1";
+      return failure();
+    }
+
+    if (dimension_numbers.scatter_dims_to_operand_dims().getType().getRank() !=
+        1) {
+      rewriter.notifyMatchFailure(
+          scatterOp,
+          "couldn't lower scatter with scatter_dims_to_operand_dims with non"
+          " rank-1");
+      return failure();
+    }
+
+    // We assume the scatter to operand dims occurs in a normal order. If
+    // support for other orders is needed a transpose should be processed on
+    // the update.
+    for (auto pair : llvm::enumerate(
+             dimension_numbers.scatter_dims_to_operand_dims().getIntValues())) {
+      if (pair.index() != pair.value()) {
+        rewriter.notifyMatchFailure(
+            scatterOp,
+            "couldn't lower scatter with scatter_dims_to_operand_dims "
+            "!= [0, 1, ..., n]");
+        return failure();
+      }
+    }
+
+    if (dimension_numbers.inserted_window_dims().getType().getRank() != 1) {
+      rewriter.notifyMatchFailure(
+          scatterOp,
+          "couldn't lower scatter with inserted_window_dims with non rank-1");
+      return failure();
+    }
+
+    // Inserted window dims only occurs in normal order and all sources should
+    // only support these values.
+    for (auto pair : llvm::enumerate(
+             dimension_numbers.inserted_window_dims().getIntValues())) {
+      if (pair.index() != pair.value()) {
+        rewriter.notifyMatchFailure(
+            scatterOp,
+            "couldn't lower scatter with inserted_window_dims "
+            "!= [0, 1, ..., n]");
+        return failure();
+      }
+    }
+
+    if (dimension_numbers.update_window_dims().getType().getRank() != 1) {
+      rewriter.notifyMatchFailure(
+          scatterOp,
+          "couldn't lower scatter with update_window_dims with non rank-1");
+      return failure();
+    }
+
+    for (auto pair : llvm::enumerate(
+             dimension_numbers.update_window_dims().getIntValues())) {
+      if ((pair.index() + 1) != pair.value()) {
+        rewriter.notifyMatchFailure(
+            scatterOp,
+            "couldn't lower scatter with update_window_dims != [1, 2, ..., n]");
+        return failure();
+      }
+    }
+
+    auto src = scatterOp.operand();
+    auto indices = scatterOp.scatter_indices();
+    auto update = scatterOp.updates();
+    auto result = scatterOp.getResult();
+
+    auto srcShape = VMLAConversionTarget::getTensorShape(
+        scatterOp.getLoc(), src, typeConverter, rewriter);
+    auto indicesShape = VMLAConversionTarget::getTensorShape(
+        scatterOp.getLoc(), indices, typeConverter, rewriter);
+    auto updateShape = VMLAConversionTarget::getTensorShape(
+        scatterOp.getLoc(), update, typeConverter, rewriter);
+    auto resultShape = VMLAConversionTarget::getTensorShape(
+        scatterOp.getLoc(), result, typeConverter, rewriter);
+
+    auto dstShape = VMLAConversionTarget::getTensorShape(
+        scatterOp.getLoc(), scatterOp.getResult(), typeConverter, rewriter);
+
+    SmallVector<Value, 4> lengths(rank);
+    for (int i = 0; i < rank; ++i) {
+      lengths[i] = rewriter.createOrFold<Shape::RankedDimOp>(
+          scatterOp.getLoc(), rewriter.getIndexType(), srcShape, i);
+    }
+
+    // Verify the update computation is only a scatter write and does not
+    // perform an other update.
+    // TODO(suderman): Handle other numeric updates.
+    auto &firstBlock = scatterOp.getRegion().front();
+    if (!isa<mhlo::ReturnOp>(firstBlock.front()) ||
+        firstBlock.front().getOperand(0) != firstBlock.getArgument(1)) {
+      rewriter.notifyMatchFailure(scatterOp,
+                                  "scatter update is not solely a write.");
+      return failure();
+    }
+
+    // Copy the source contents. The copy can be optimized in the future.
+    Value zero =
+        rewriter.createOrFold<mlir::ConstantIndexOp>(scatterOp.getLoc(), 0);
+    llvm::SmallVector<Value, 4> srcOffset(rank, zero);
+    llvm::SmallVector<Value, 4> dstOffset(rank, zero);
+    auto dst = VMLAConversionTarget::allocateOutputBuffer(
+        scatterOp.getLoc(), scatterOp.getResult(), typeConverter, rewriter);
+    rewriter.create<IREE::VMLA::CopyOp>(
+        scatterOp.getLoc(), src, resultShape, srcOffset, dst, dstShape,
+        dstOffset, lengths,
+        TypeAttr::get(scatterOp.getType().cast<ShapedType>().getElementType()));
+
+    rewriter.create<IREE::VMLA::ScatterOp>(
+        scatterOp.getLoc(), update, updateShape, indices, indicesShape, dst,
+        dstShape,
+        TypeAttr::get(scatterOp.getType().cast<ShapedType>().getElementType()));
+
+    rewriter.replaceOp(scatterOp, {dst});
+
+    return success();
+  }
+  TypeConverter &typeConverter;
+};
+
 // Converts a dynamic slice op to a copy (if the source must be preserved).
 struct DynamicSliceOpConversion
-    : public OpConversionPattern<xla_hlo::DynamicSliceOp> {
+    : public OpConversionPattern<mhlo::DynamicSliceOp> {
   DynamicSliceOpConversion(MLIRContext *context, TypeConverter &typeConverter)
       : OpConversionPattern(context), typeConverter(typeConverter) {}
 
   LogicalResult matchAndRewrite(
-      xla_hlo::DynamicSliceOp srcOp, ArrayRef<Value> rawOperands,
+      mhlo::DynamicSliceOp srcOp, ArrayRef<Value> rawOperands,
       ConversionPatternRewriter &rewriter) const override {
-    xla_hlo::DynamicSliceOpOperandAdaptor operands(rawOperands);
+    mhlo::DynamicSliceOp::Adaptor operands(rawOperands);
     // TODO(benvanik): if the source is only used by this op then replace with
     // a vmla.buffer.view op.
 
@@ -448,12 +588,12 @@ struct DynamicSliceOpConversion
   TypeConverter &typeConverter;
 };
 
-struct CompareOpConversion : public OpConversionPattern<xla_hlo::CompareOp> {
+struct CompareOpConversion : public OpConversionPattern<mhlo::CompareOp> {
   CompareOpConversion(MLIRContext *context, TypeConverter &typeConverter)
       : OpConversionPattern(context), typeConverter(typeConverter) {}
 
   LogicalResult matchAndRewrite(
-      xla_hlo::CompareOp srcOp, ArrayRef<Value> rawOperands,
+      mhlo::CompareOp srcOp, ArrayRef<Value> rawOperands,
       ConversionPatternRewriter &rewriter) const override {
     auto linputType = srcOp.lhs().getType().dyn_cast<ShapedType>();
     auto rinputType = srcOp.rhs().getType().dyn_cast<ShapedType>();
@@ -509,6 +649,41 @@ struct CompareOpConversion : public OpConversionPattern<xla_hlo::CompareOp> {
   TypeConverter &typeConverter;
 };
 
+struct ConvertOpConversion : public OpConversionPattern<mhlo::ConvertOp> {
+  ConvertOpConversion(MLIRContext *context, TypeConverter &typeConverter)
+      : OpConversionPattern(context), typeConverter(typeConverter) {}
+
+  LogicalResult matchAndRewrite(
+      mhlo::ConvertOp srcOp, ArrayRef<Value> rawOperands,
+      ConversionPatternRewriter &rewriter) const override {
+    auto srcType = srcOp.operand().getType().cast<ShapedType>();
+    auto dstType = srcOp.getResult().getType().cast<ShapedType>();
+
+    // The mhlo.convert op can have the same src and dst element types, in
+    // which case it just represents a static structural annotation of a shape
+    // change, so it is just an identity op at runtime.
+    if (srcType.getElementType() == dstType.getElementType()) {
+      return IdentityOpConversion<mhlo::ConvertOp>{rewriter.getContext()}
+          .matchAndRewrite(srcOp, rawOperands, rewriter);
+    }
+
+    // VMLA does not support tensors of i1. tensor<*xi1> will be converted to
+    // tensor<*xi8>.
+    if (srcType.getElementTypeBitWidth() == 1 &&
+        dstType.getElementTypeBitWidth() == 8) {
+      rewriter.replaceOp(srcOp, rawOperands);
+    } else {
+      return VMLAConversionTarget::applyDefaultBufferRewrite(
+          srcOp, rawOperands, VMLAOpSemantics::kDefault,
+          IREE::VMLA::ConvertOp::getOperationName(), typeConverter, rewriter);
+    }
+
+    return success();
+  }
+
+  TypeConverter &typeConverter;
+};
+
 }  // namespace
 
 void populateHLOToVMLAPatterns(MLIRContext *context,
@@ -517,12 +692,12 @@ void populateHLOToVMLAPatterns(MLIRContext *context,
   // We rely on some additional HLO->std patterns and assume they
   // have been run already. In case they haven't we provide them here (useful
   // for standalone conversion testing).
-  xla_hlo::PopulateXlaToStdPatterns(&patterns, context);
+  mhlo::PopulateMhloToStdPatterns(&patterns, context);
 
-  // xla_hlo.convolution.
+  // mhlo.convolution.
   populateHLOConvToVMLAPatterns(context, patterns, typeConverter);
 
-  // xla_hlo.reduce and xla_hlo.reduce_window.
+  // mhlo.reduce and mhlo.reduce_window.
   populateHLOReductionToVMLAPatterns(context, patterns, typeConverter);
 
   // vmla.batch.matmul.pseudo
@@ -532,90 +707,88 @@ void populateHLOToVMLAPatterns(MLIRContext *context,
 
   // Simple 1:1 conversion patterns using the automated trait-based converter.
   // Used for HLO ops that have equivalent VMLA ops such as most arithmetic ops.
-  patterns.insert<VMLAOpConversion<xla_hlo::AddOp, IREE::VMLA::AddOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::AddOp, IREE::VMLA::AddOp>>(
       context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::SubOp, IREE::VMLA::SubOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::SubOp, IREE::VMLA::SubOp>>(
       context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::DivOp, IREE::VMLA::DivOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::DivOp, IREE::VMLA::DivOp>>(
       context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::MulOp, IREE::VMLA::MulOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::MulOp, IREE::VMLA::MulOp>>(
       context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::PowOp, IREE::VMLA::PowOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::PowOp, IREE::VMLA::PowOp>>(
       context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::RemOp, IREE::VMLA::RemOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::RemOp, IREE::VMLA::RemOp>>(
       context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::ShiftLeftOp, IREE::VMLA::ShlOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::ShiftLeftOp, IREE::VMLA::ShlOp>>(
       context, typeConverter);
   patterns.insert<
-      VMLAOpConversion<xla_hlo::ShiftRightArithmeticOp, IREE::VMLA::ShrOp>>(
+      VMLAOpConversion<mhlo::ShiftRightArithmeticOp, IREE::VMLA::ShrOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::ShiftRightLogicalOp, IREE::VMLA::ShrOp,
+                                   VMLAOpSemantics::kForceUnsigned>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::AndOp, IREE::VMLA::AndOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::OrOp, IREE::VMLA::OrOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::XorOp, IREE::VMLA::XorOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::ExpOp, IREE::VMLA::ExpOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::LogOp, IREE::VMLA::LogOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::FloorOp, IREE::VMLA::FloorOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::RsqrtOp, IREE::VMLA::RsqrtOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::SqrtOp, IREE::VMLA::SqrtOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::CosOp, IREE::VMLA::CosOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::SinOp, IREE::VMLA::SinOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::TanhOp, IREE::VMLA::TanhOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::Atan2Op, IREE::VMLA::Atan2Op>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::SelectOp, IREE::VMLA::SelectOp>>(
+      context, typeConverter);
+  patterns.insert<ConvertOpConversion>(context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::ReverseOp, IREE::VMLA::ReverseOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::TransposeOp, IREE::VMLA::TransposeOp>>(
+      context, typeConverter);
+  patterns.insert<VMLAOpConversion<mhlo::PadOp, IREE::VMLA::PadOp>>(
       context, typeConverter);
   patterns
-      .insert<VMLAOpConversion<xla_hlo::ShiftRightLogicalOp, IREE::VMLA::ShrOp,
-                               VMLAOpSemantics::kForceUnsigned>>(context,
-                                                                 typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::AndOp, IREE::VMLA::AndOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::OrOp, IREE::VMLA::OrOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::XorOp, IREE::VMLA::XorOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::ExpOp, IREE::VMLA::ExpOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::LogOp, IREE::VMLA::LogOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::FloorOp, IREE::VMLA::FloorOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::RsqrtOp, IREE::VMLA::RsqrtOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::SqrtOp, IREE::VMLA::SqrtOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::CosOp, IREE::VMLA::CosOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::SinOp, IREE::VMLA::SinOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::TanhOp, IREE::VMLA::TanhOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::Atan2Op, IREE::VMLA::Atan2Op>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::SelectOp, IREE::VMLA::SelectOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::ConvertOp, IREE::VMLA::ConvertOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::ReverseOp, IREE::VMLA::ReverseOp>>(
-      context, typeConverter);
-  patterns
-      .insert<VMLAOpConversion<xla_hlo::TransposeOp, IREE::VMLA::TransposeOp>>(
+      .insert<VMLAOpConversion<mhlo::TorchIndexSelectOp, IREE::VMLA::GatherOp>>(
           context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::PadOp, IREE::VMLA::PadOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::AbsOp, IREE::VMLA::AbsOp>>(
       context, typeConverter);
-  patterns.insert<
-      VMLAOpConversion<xla_hlo::TorchIndexSelectOp, IREE::VMLA::GatherOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::NegOp, IREE::VMLA::NegOp>>(
       context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::AbsOp, IREE::VMLA::AbsOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::MaxOp, IREE::VMLA::MaxOp>>(
       context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::NegOp, IREE::VMLA::NegOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::MinOp, IREE::VMLA::MinOp>>(
       context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::MaxOp, IREE::VMLA::MaxOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::MinOp, IREE::VMLA::MinOp>>(
-      context, typeConverter);
-  patterns.insert<VMLAOpConversion<xla_hlo::ClampOp, IREE::VMLA::ClampOp>>(
+  patterns.insert<VMLAOpConversion<mhlo::ClampOp, IREE::VMLA::ClampOp>>(
       context, typeConverter);
 
   patterns.insert<CompareOpConversion>(context, typeConverter);
 
   // Ops that are only used for type information that we erase. We can elide
   // these entirely by just passing on their input values.
-  patterns.insert<IdentityOpConversion<xla_hlo::BitcastConvertOp>>(context);
-  patterns.insert<IdentityOpConversion<xla_hlo::CopyOp>>(context);
-  patterns.insert<IdentityOpConversion<xla_hlo::ReshapeOp>>(context);
-  patterns.insert<IdentityOpConversion<xla_hlo::DynamicReshapeOp>>(context);
+  patterns.insert<IdentityOpConversion<mhlo::BitcastConvertOp>>(context);
+  patterns.insert<IdentityOpConversion<mhlo::CopyOp>>(context);
+  patterns.insert<IdentityOpConversion<mhlo::ReshapeOp>>(context);
+  patterns.insert<IdentityOpConversion<mhlo::DynamicReshapeOp>>(context);
 
   // Conversions that don't have a 1:1 mapping, mostly involving buffer views
   // or transfers.
   patterns.insert<BroadcastInDimOpConversion>(context, typeConverter);
   patterns.insert<ConcatenateOpConversion>(context, typeConverter);
   patterns.insert<GatherOpConversion>(context, typeConverter);
+  patterns.insert<ScatterOpConversion>(context, typeConverter);
   patterns.insert<SliceOpConversion>(context, typeConverter);
   patterns.insert<DynamicSliceOpConversion>(context, typeConverter);
 

@@ -19,7 +19,7 @@
 
 # Looks at environment variables and uses CI-friendly defaults if they are not
 # set.
-# IREE_LLVMJIT_DISABLE: Do not run tests that require LLVM-JIT. Default: 1
+# IREE_LLVMJIT_DISABLE: Do not run tests that require LLVM-JIT. Default: 0
 # IREE_VULKAN_DISABLE: Do not run tests that require Vulkan. Default: 1
 # BUILD_TAG_FILTERS: Passed to bazel to filter targets to build.
 #   See https://docs.bazel.build/versions/master/command-line-reference.html#flag--build_tag_filters)
@@ -34,23 +34,28 @@ set -x
 
 # Use user-environment variables if set, otherwise use CI-friendly defaults.
 if ! [[ -v IREE_LLVMJIT_DISABLE ]]; then
-  IREE_LLVMJIT_DISABLE=1
+  IREE_LLVMJIT_DISABLE=0
 fi
 if ! [[ -v IREE_VULKAN_DISABLE ]]; then
   IREE_VULKAN_DISABLE=1
 fi
+
 declare -a test_env_args=(
   --test_env=IREE_LLVMJIT_DISABLE=$IREE_LLVMJIT_DISABLE
   --test_env=IREE_VULKAN_DISABLE=$IREE_VULKAN_DISABLE
+  --test_env=IREE_LLVMAOT_LINKER_PATH
 )
 
 declare -a default_build_tag_filters=("-nokokoro")
 declare -a default_test_tag_filters=("-nokokoro")
 
-# We can still build things that use vulkan. Only add to test tag filters.
 if [[ "${IREE_VULKAN_DISABLE?}" == 1 ]]; then
   default_test_tag_filters+=("-driver=vulkan")
 fi
+if [[ "${IREE_LLVMJIT_DISABLE?}" == 1 ]]; then
+  default_test_tag_filters+=("-driver=llvm")
+fi
+
 # Use user-environment variables if set, otherwise use CI-friendly defaults.
 if ! [[ -v BUILD_TAG_FILTERS ]]; then
   # String join on comma

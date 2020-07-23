@@ -30,13 +30,15 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 
 namespace mlir {
 namespace iree_compiler {
 namespace IREE {
 namespace VMLA {
 
+// Rewrites entry functions to have a vmla.interface and an XYZ workgroup ID.
+// The runtime will provide these values during invocation.
 static LogicalResult insertInterfacesToEntryPoints(mlir::ModuleOp moduleOp) {
   for (auto funcOp : moduleOp.getOps<FuncOp>()) {
     if (SymbolTable::getSymbolVisibility(funcOp) !=
@@ -48,10 +50,13 @@ static LogicalResult insertInterfacesToEntryPoints(mlir::ModuleOp moduleOp) {
       return funcOp.emitError() << "exported functions must have no I/O";
     }
     auto interfaceType = IREE::VMLA::InterfaceType::get(moduleOp.getContext());
+    auto indexType = IndexType::get(moduleOp.getContext());
     auto newType =
-        FunctionType::get({interfaceType}, {}, moduleOp.getContext());
+        FunctionType::get({interfaceType, indexType, indexType, indexType}, {},
+                          moduleOp.getContext());
     funcOp.setType(newType);
-    funcOp.front().addArgument(interfaceType);
+    funcOp.front().addArguments(
+        {interfaceType, indexType, indexType, indexType});
   }
   return success();
 }
@@ -73,7 +78,7 @@ class ConversionPass
     VMLAConversionTarget conversionTarget(context, typeConverter);
 
     // Ensure all input dialects go away.
-    conversionTarget.addIllegalDialect<xla_hlo::XlaHloDialect>();
+    conversionTarget.addIllegalDialect<mhlo::MhloDialect>();
     conversionTarget.addIllegalDialect<IREE::HAL::HALDialect>();
 
     OwningRewritePatternList conversionPatterns;
@@ -109,14 +114,14 @@ class ConversionPass
     // TODO(silvasean): Legalize ToExtentTensorOp and FromExtentTensorOp.
     conversionTarget.addIllegalOp<Shape::FromExtentTensorOp>();
     // RankedBroadcastInDimOp is an logically something that should be an
-    // xla_hlo op (or in a dialect at a similar level of abstraction), but since
+    // mhlo op (or in a dialect at a similar level of abstraction), but since
     // it isn't technically in that dialect, we need to special-case mark it as
     // illegal here.
     // TODO(silvasean): Reconcile the dialect layering here.
     conversionTarget.addIllegalOp<Shape::RankedBroadcastInDimOp>();
 
     if (failed(applyPartialConversion(getOperation(), conversionTarget,
-                                      conversionPatterns, &typeConverter))) {
+                                      conversionPatterns))) {
       getOperation().emitError() << "conversion to the VMLA dialect failed";
       return signalPassFailure();
     }

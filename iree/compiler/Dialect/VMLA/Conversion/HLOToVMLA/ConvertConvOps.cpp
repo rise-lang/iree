@@ -31,20 +31,20 @@
 #include "mlir/IR/StandardTypes.h"
 #include "mlir/IR/SymbolTable.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 
 namespace mlir {
 namespace iree_compiler {
 
 namespace {
 
-struct VMLAConvOpConverter : public OpConversionPattern<xla_hlo::ConvOp> {
+struct VMLAConvOpConverter : public OpConversionPattern<mhlo::ConvOp> {
   using OpConversionPattern::OpConversionPattern;
   VMLAConvOpConverter(MLIRContext *context, TypeConverter &typeConverter)
       : OpConversionPattern(context), typeConverter(typeConverter) {}
 
   LogicalResult matchAndRewrite(
-      xla_hlo::ConvOp op, ArrayRef<Value> operands,
+      mhlo::ConvOp op, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
     if (op.dimension_numbers()) {
       const auto dimensionNumbers = op.dimension_numbers();

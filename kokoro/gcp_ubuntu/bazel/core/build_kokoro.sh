@@ -14,8 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Build and test IREE's core within the gcr.io/iree-oss/bazel-tensorflow
-# image using Kokoro.
+# Build and test IREE's core within the gcr.io/iree-oss/bazel image using
+# Kokoro.
 
 set -e
 set -x
@@ -27,16 +27,17 @@ export PS4='[$(date -u "+%T %Z")] '
 WORKDIR="${KOKORO_ARTIFACTS_DIR?}/github/iree"
 
 # Mount the checked out repository, make that the working directory and run the
-# tests in the bazel-tensorflow image.
-# TODO: Make this use the gcr.io/iree-oss/bazel:prod image once we separate out
-# the bindings from `build_core.sh`.
+# tests in the bazel image.
 docker run \
   --volume "${WORKDIR?}:${WORKDIR?}" \
   --workdir="${WORKDIR?}" \
   --rm \
-  gcr.io/iree-oss/bazel-tensorflow:prod \
+  gcr.io/iree-oss/bazel:prod \
   kokoro/gcp_ubuntu/bazel/core/build.sh
 
 # Kokoro will rsync this entire directory back to the executor orchestrating the
 # build which takes forever and is totally useless.
-rm -rf "${KOKORO_ARTIFACTS_DIR?}/*"
+sudo rm -rf "${KOKORO_ARTIFACTS_DIR?}"/*
+
+# Print out artifacts dir contents after deleting them as a coherence check.
+ls -1a "${KOKORO_ARTIFACTS_DIR?}/"

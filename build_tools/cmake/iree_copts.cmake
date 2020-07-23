@@ -12,7 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+#-------------------------------------------------------------------------------
+# Abseil configuration
+#-------------------------------------------------------------------------------
+
 include(AbseilConfigureCopts)
+
+# By default Abseil strips string literals on mobile platforms, which means
+# we cannot run IREE binaries via command-line with proper options. Turn off
+# the stripping.
+# TODO: we might still want to strip when compiling IREE into Android Java apps.
+if(ANDROID)
+  add_definitions(-DABSL_FLAGS_STRIP_NAMES=0)
+endif()
 
 #-------------------------------------------------------------------------------
 # C++ used within IREE
@@ -42,6 +54,10 @@ iree_select_compiler_opts(IREE_DEFAULT_COPTS
     "-Wno-gnu-label-as-value"
     "-Wno-unused-local-typedef"
     "-Wno-gnu-zero-variadic-macro-arguments"
+    # Enable some warnings
+    "-Wimplicit-fallthrough"
+    "-Wthread-safety-analysis"
+    "-Wunused-variable"
   CLANG_OR_GCC
     "-Wno-unused-parameter"
     "-Wno-undef"
@@ -89,13 +105,19 @@ set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 #-------------------------------------------------------------------------------
 
 set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
-set(FLATBUFFERS_BUILD_FLATC ON CACHE BOOL "" FORCE)
 set(FLATBUFFERS_BUILD_FLATHASH OFF CACHE BOOL "" FORCE)
 set(FLATBUFFERS_BUILD_GRPCTEST OFF CACHE BOOL "" FORCE)
+set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
 set(FLATBUFFERS_INCLUDE_DIRS
   "${PROJECT_SOURCE_DIR}/third_party/flatbuffers/include/"
 )
+
+if(CMAKE_CROSSCOMPILING)
+  set(FLATBUFFERS_BUILD_FLATC OFF CACHE BOOL "" FORCE)
+else()
+  set(FLATBUFFERS_BUILD_FLATC ON CACHE BOOL "" FORCE)
+endif()
+
 iree_select_compiler_opts(FLATBUFFERS_COPTS
   CLANG
     # Flatbuffers has a bunch of incorrect documentation annotations.
@@ -128,20 +150,30 @@ set(LLVM_APPEND_VC_REV OFF CACHE BOOL "" FORCE)
 set(LLVM_ENABLE_IDE ON CACHE BOOL "" FORCE)
 set(LLVM_ENABLE_RTTI ON CACHE BOOL "" FORCE)
 
-set(LLVM_TARGETS_TO_BUILD "WebAssembly;X86" CACHE STRING "" FORCE)
+# TODO(ataei): Use optional build time targets selection for LLVMAOT.
+set(LLVM_TARGETS_TO_BUILD "WebAssembly;X86;ARM;AArch64" CACHE STRING "" FORCE)
 
 set(LLVM_ENABLE_PROJECTS "mlir" CACHE STRING "" FORCE)
 set(LLVM_ENABLE_BINDINGS OFF CACHE BOOL "" FORCE)
 
-list(APPEND IREE_COMMON_INCLUDE_DIRS
-  ${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm/include
-  ${PROJECT_BINARY_DIR}/third_party/llvm-project/llvm/include
-  ${PROJECT_SOURCE_DIR}/third_party/llvm-project/mlir/include
-  ${PROJECT_BINARY_DIR}/third_party/llvm-project/llvm/tools/mlir/include
-)
+if(IREE_USE_LINKER)
+  set(LLVM_USE_LINKER ${IREE_USE_LINKER} CACHE STRING "" FORCE)
+endif()
+
+# TODO: This should go in add_iree_mlir_src_dep at the top level.
+if(IREE_MLIR_DEP_MODE STREQUAL "BUNDLED")
+  list(APPEND IREE_COMMON_INCLUDE_DIRS
+    ${PROJECT_SOURCE_DIR}/third_party/llvm-project/llvm/include
+    ${PROJECT_BINARY_DIR}/third_party/llvm-project/llvm/include
+    ${PROJECT_SOURCE_DIR}/third_party/llvm-project/mlir/include
+    ${PROJECT_BINARY_DIR}/third_party/llvm-project/llvm/tools/mlir/include
+  )
+endif()
 
 set(MLIR_TABLEGEN_EXE mlir-tblgen)
-set(IREE_TABLEGEN_EXE iree-tblgen)
+# iree-tblgen is not defined using the add_tablegen mechanism as other TableGen
+# tools in LLVM.
+iree_get_executable_path(IREE_TABLEGEN_EXE iree-tblgen)
 
 #-------------------------------------------------------------------------------
 # Third party: tensorflow
@@ -149,5 +181,7 @@ set(IREE_TABLEGEN_EXE iree-tblgen)
 
 list(APPEND IREE_COMMON_INCLUDE_DIRS
   ${PROJECT_SOURCE_DIR}/third_party/tensorflow
+  ${PROJECT_SOURCE_DIR}/third_party/tensorflow/tensorflow/compiler/mlir/hlo/include/
   ${PROJECT_BINARY_DIR}/build_tools/third_party/tensorflow
+  ${PROJECT_BINARY_DIR}/build_tools/third_party/tensorflow/tensorflow/compiler/mlir/hlo/include/
 )

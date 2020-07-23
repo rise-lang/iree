@@ -14,6 +14,7 @@
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -22,6 +23,7 @@ cc_library(
     srcs = [
         "GuaranteeAllFuncsOneUse.cpp",
         "Passes.cpp",
+        "PropagateResourceCasts.cpp",
         "TFSavedModelLowerExportedFunctions.cpp",
         "TFSavedModelLowerGlobalTensors.cpp",
     ],
@@ -40,10 +42,11 @@ cc_library(
         "//iree/compiler/Dialect/IREE/IR",
         "//iree/compiler/Dialect/Shape/Conversion",
         "//iree/compiler/Dialect/Shape/Transforms",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Shape",
+        "@llvm-project//mlir:ShapeTransforms",
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:TransformUtils",
         "@org_tensorflow//tensorflow/compiler/mlir/tensorflow",

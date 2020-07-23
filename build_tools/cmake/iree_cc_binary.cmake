@@ -30,6 +30,8 @@ endif()
 # COPTS: List of private compile options
 # DEFINES: List of public defines
 # LINKOPTS: List of link options
+# TESTONLY: for testing; won't compile when tests are disabled
+# HOSTONLY: host only; compile using host toolchain when cross-compiling
 #
 # Note:
 # By default, iree_cc_binary will always create a binary named iree_${NAME}.
@@ -58,7 +60,7 @@ endif()
 function(iree_cc_binary)
   cmake_parse_arguments(
     _RULE
-    "TESTONLY"
+    "HOSTONLY;TESTONLY"
     "NAME;OUT"
     "SRCS;COPTS;DEFINES;LINKOPTS;DATA;DEPS"
     ${ARGN}
@@ -71,6 +73,22 @@ function(iree_cc_binary)
   # Prefix the library with the package name, so we get: iree_package_name
   iree_package_name(_PACKAGE_NAME)
   set(_NAME "${_PACKAGE_NAME}_${_RULE_NAME}")
+
+  if(_RULE_HOSTONLY AND CMAKE_CROSSCOMPILING)
+    # The binary is marked as host only. We need to declare the rules for
+    # generating them under host configuration so when cross-compiling towards
+    # target we can still have this binary.
+    iree_declare_host_excutable(${_RULE_NAME})
+
+    # Still define the package-prefixed target so we can have a consistent way
+    # to reference this binary, whether cross-compiling or not. But this time
+    # use the target to convey a property for the executable path under host
+    # configuration.
+    iree_get_executable_path(_EXE_PATH ${_RULE_NAME})
+    add_custom_target(${_NAME} DEPENDS ${_EXE_PATH})
+    set_target_properties(${_NAME} PROPERTIES HOST_TARGET_FILE "${_EXE_PATH}")
+    return()
+  endif()
 
   add_executable(${_NAME} "")
   add_executable(${_RULE_NAME} ALIAS ${_NAME})
@@ -126,6 +144,11 @@ function(iree_cc_binary)
   # Track target and deps, use in iree_complete_binary_link_options() later.
   set_property(GLOBAL APPEND PROPERTY _IREE_CC_BINARY_NAMES "${_NAME}")
   set_property(TARGET ${_NAME} PROPERTY DIRECT_DEPS ${_RULE_DEPS})
+
+  install(TARGETS ${_NAME}
+          RENAME ${_RULE_NAME}
+          COMPONENT ${_RULE_NAME}
+          RUNTIME DESTINATION bin)
 endfunction()
 
 # Lists all transitive dependencies of DIRECT_DEPS in TRANSITIVE_DEPS.
@@ -211,7 +234,7 @@ function(iree_complete_binary_link_options)
         get_target_property(_DEP_TYPE ${_DEP} TYPE)
         if(${_DEP_TYPE} STREQUAL "INTERFACE_LIBRARY")
           # Can't be ALWAYSLINK since it's an INTERFACE library.
-          # We also can't even query for the property, since it isn't whitelisted.
+          # We also can't even query for the property, since it isn't allowlisted.
         else()
           get_target_property(_DEP_IS_ALWAYSLINK ${_DEP} ALWAYSLINK)
         endif()

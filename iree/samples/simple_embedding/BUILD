@@ -17,6 +17,7 @@ load("//iree/tools:compilation.bzl", "iree_bytecode_module")
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -38,11 +39,7 @@ cc_test(
         # For AddressSanitizer when using Vulkan + a local Nvidia GPU
         "//iree/tools:sanitizer_suppressions.txt",
     ],
-    # TODO(b/145815906) Get this running in OSS CI.
-    tags = [
-        "noga",
-        "nokokoro",
-    ],
+    tags = ["driver=vulkan"],
     deps = [
         ":simple_embedding_test_bytecode_module_cc",
         "@com_google_absl//absl/base:core_headers",

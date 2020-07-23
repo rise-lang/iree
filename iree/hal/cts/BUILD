@@ -18,6 +18,7 @@ load("//iree:build_defs.oss.bzl", "PLATFORM_VULKAN_TEST_DEPS")
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -35,6 +36,8 @@ cc_library(
         "//iree/hal:driver_registry",
 
         # HAL driver modules.
+        "//iree/hal/dylib:dylib_driver_module",  # build-cleaner: keep
+        "//iree/hal/llvmjit:llvmjit_driver_module",  # build-cleaner: keep
         "//iree/hal/vmla:vmla_driver_module",  # build-cleaner: keep
         "//iree/hal/vulkan:vulkan_driver_module",  # build-cleaner: keep
         # "//iree/hal/dawn:dawn_driver_module",  # build-cleaner: keep
@@ -66,8 +69,30 @@ cc_test(
 )
 
 cc_test(
+    name = "command_queue_test",
+    srcs = ["command_queue_test.cc"],
+    deps = [
+        ":cts_test_base",
+        "//iree/base:status",
+        "//iree/base:status_matchers",
+        "//iree/hal:driver_registry",
+        "//iree/testing:gtest",
+    ],
+)
+
+cc_test(
     name = "device_creation_test",
     srcs = ["device_creation_test.cc"],
+    deps = [
+        ":cts_test_base",
+        "//iree/hal:driver_registry",
+        "//iree/testing:gtest",
+    ],
+)
+
+cc_test(
+    name = "semaphore_test",
+    srcs = ["semaphore_test.cc"],
     deps = [
         ":cts_test_base",
         "//iree/hal:driver_registry",

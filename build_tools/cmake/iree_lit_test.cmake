@@ -43,6 +43,10 @@ function(iree_lit_test)
     ${ARGN}
   )
 
+  if(CMAKE_CROSSCOMPILING AND "hostonly" IN_LIST _RULE_LABELS)
+    return()
+  endif()
+
   iree_package_name(_PACKAGE_NAME)
   set(_NAME "${_PACKAGE_NAME}_${_RULE_NAME}")
 
@@ -55,7 +59,8 @@ function(iree_lit_test)
     if("${_DATA_DEP_NAME}" STREQUAL "iree_tools_IreeFileCheck")
       list(APPEND _DATA_DEP_PATHS "${CMAKE_SOURCE_DIR}/iree/tools/IreeFileCheck.sh")
     else()
-      list(APPEND _DATA_DEP_PATHS $<TARGET_FILE:${_DATA_DEP_NAME}>)
+      iree_get_target_path(_DATA_DEP_PATH ${_DATA_DEP_NAME})
+      list(APPEND _DATA_DEP_PATHS "${_DATA_DEP_PATH}")
     endif()
   endforeach(_DATA_DEP)
 

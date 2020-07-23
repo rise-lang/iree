@@ -52,6 +52,9 @@ cd ${ROOT_DIR?}
 # Update op_coverage.md
 scripts/update_op_coverage.py ${BUILD_DIR}
 
+# Update e2e_coverage.md
+PYTHON_BIN=`which python3` scripts/update_e2e_coverage.py ${BUILD_DIR}
+
 # Copy a curated list of docs to publish. This is expected to cover all docs
 # under docs/ after they are refreshed.
 
@@ -71,5 +74,9 @@ cp docs/GetStarted/getting_started_windows_vulkan.md ${BUILD_DIR}/doc/GetStarted
 cp docs/GetStarted/getting_started_linux_bazel.md ${BUILD_DIR}/doc/GetStarted/
 cp docs/GetStarted/getting_started_linux_cmake.md ${BUILD_DIR}/doc/GetStarted/
 cp docs/GetStarted/getting_started_linux_vulkan.md ${BUILD_DIR}/doc/GetStarted/
+cp docs/GetStarted/getting_started_macos_bazel.md ${BUILD_DIR}/doc/GetStarted/
+cp docs/GetStarted/getting_started_macos_cmake.md ${BUILD_DIR}/doc/GetStarted/
+cp docs/GetStarted/getting_started_android_cmake.md ${BUILD_DIR}/doc/GetStarted/
 cp docs/GetStarted/getting_started_python.md ${BUILD_DIR}/doc/GetStarted/
 cp docs/GetStarted/generic_vulkan_env_setup.md ${BUILD_DIR}/doc/GetStarted/
+cp docs/GetStarted/cmake_options_and_variables.md ${BUILD_DIR}/doc/GetStarted/

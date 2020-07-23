@@ -24,34 +24,20 @@
 #include "mlir/IR/StandardTypes.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 
 namespace mlir {
 namespace iree_compiler {
 namespace Shape {
 namespace {
 
-// Returns a 1-d i64 elements attribute populated with numbers from start to
-// end, excluding.
-static DenseIntElementsAttr getI64ElementsAttrForSeq(int start, int end,
-                                                     Builder &builder) {
-  int size = end - start;
-
-  SmallVector<int64_t, 4> vals;
-  vals.resize(size);
-  std::iota(vals.begin(), vals.end(), start);
-
-  TensorType ty = RankedTensorType::get({size}, builder.getIntegerType(64));
-  return DenseIntElementsAttr::get(ty, vals);
-}
-
 class ConvertDynamicBroadcastInDim
-    : public OpConversionPattern<xla_hlo::DynamicBroadcastInDimOp> {
+    : public OpConversionPattern<mhlo::DynamicBroadcastInDimOp> {
   using OpConversionPattern::OpConversionPattern;
   LogicalResult matchAndRewrite(
-      xla_hlo::DynamicBroadcastInDimOp op, ArrayRef<Value> operands,
+      mhlo::DynamicBroadcastInDimOp op, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    xla_hlo::DynamicBroadcastInDimOpOperandAdaptor adapter(operands);
+    mhlo::DynamicBroadcastInDimOp::Adaptor adapter(operands);
     Value rankedShape = rewriter.create<Shape::FromExtentTensorOp>(
         op.getLoc(), adapter.output_dimensions());
     rewriter.replaceOpWithNewOp<Shape::RankedBroadcastInDimOp>(
@@ -69,9 +55,9 @@ class ConvertHLOToShapePass
 
     conversionTarget.addLegalDialect<ShapeDialect>();
     conversionTarget.addLegalDialect<StandardOpsDialect>();
-    conversionTarget.addLegalDialect<xla_hlo::XlaHloDialect>();
+    conversionTarget.addLegalDialect<mhlo::MhloDialect>();
 
-    conversionTarget.addIllegalOp<xla_hlo::DynamicBroadcastInDimOp>();
+    conversionTarget.addIllegalOp<mhlo::DynamicBroadcastInDimOp>();
     conversionPatterns.insert<ConvertDynamicBroadcastInDim>(&getContext());
 
     if (failed(applyPartialConversion(getFunction(), conversionTarget,

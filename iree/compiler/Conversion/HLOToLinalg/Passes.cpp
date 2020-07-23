@@ -16,13 +16,16 @@
 #include "mlir/Dialect/Rise/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/Passes.h"
 
 namespace mlir {
 namespace iree_compiler {
 
 void addHLOToLinalgOnBuffersPasses(OpPassManager &pm) {
   pm.addPass(createHLOToLinalgOnTensorsPass());
-  // pm.addPass(createLinalgOnTensorsFusionPass());
+  pm.addPass(createLinalgFusionOfTensorOpsPass());
+  pm.addPass(createLinalgFoldUnitExtentDimsPass());
+  pm.addPass(createCanonicalizerPass());
   pm.addPass(createLinalgFusionOfTensorOpsPass());
   pm.addPass(createHLOToLinalgOnBuffersPass());
   pm.addPass(rise::createConvertRiseToImperativePass());

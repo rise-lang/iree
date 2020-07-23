@@ -18,6 +18,7 @@
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -123,7 +124,6 @@ cc_library(
     srcs = ["command_buffer.cc"],
     hdrs = ["command_buffer.h"],
     deps = [
-        ":allocator",
         ":buffer",
         ":descriptor_set",
         ":event",
@@ -140,6 +140,7 @@ cc_library(
     srcs = ["command_buffer_validation.cc"],
     hdrs = ["command_buffer_validation.h"],
     deps = [
+        ":allocator",
         ":command_buffer",
         "//iree/base:logging",
         "//iree/base:status",

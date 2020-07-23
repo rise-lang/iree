@@ -11,9 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+load("//iree:build_defs.oss.bzl", "platform_trampoline_deps")
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -31,10 +34,10 @@ cc_library(
         "//iree/compiler/Conversion/LinalgToLLVM",
         "//iree/compiler/Dialect/HAL/Target",
         "//iree/schemas:llvmir_executable_def_cc_fbs",
-        "@llvm-project//llvm:ir",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Core",
+        "@llvm-project//llvm:Support",
         # TODO(ataei): Link with native target dep.
-        "@llvm-project//llvm:x86_target",
+        "@llvm-project//llvm:X86CodeGen",
         "@llvm-project//mlir:TargetLLVMIR",
     ],
 )
@@ -48,13 +51,20 @@ cc_library(
         "LLVMAOTTarget.h",
     ],
     deps = [
+        ":LLVMAOTTargetLinker",
         ":LLVMIRPasses",
         ":LLVMTargetOptions",
         "//iree/compiler/Conversion/LinalgToLLVM",
         "//iree/compiler/Dialect/HAL/Target",
         "//iree/schemas:dylib_executable_def_cc_fbs",
-        "@llvm-project//llvm:ir",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:AArch64AsmParser",
+        "@llvm-project//llvm:AArch64CodeGen",
+        "@llvm-project//llvm:ARMAsmParser",
+        "@llvm-project//llvm:ARMCodeGen",
+        "@llvm-project//llvm:Core",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//llvm:X86AsmParser",
+        "@llvm-project//llvm:X86CodeGen",
         "@llvm-project//mlir:TargetLLVMIR",
     ],
 )
@@ -69,10 +79,10 @@ cc_library(
     ],
     deps = [
         ":LLVMTargetOptions",
-        "@llvm-project//llvm:ir",
-        "@llvm-project//llvm:passes",
-        "@llvm-project//llvm:support",
-        "@llvm-project//llvm:target_base",
+        "@llvm-project//llvm:Core",
+        "@llvm-project//llvm:Passes",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//llvm:Target",
         "@llvm-project//mlir:Support",
     ],
 )
@@ -86,7 +96,25 @@ cc_library(
         "LLVMTargetOptions.h",
     ],
     deps = [
-        "@llvm-project//llvm:passes",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Passes",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//llvm:Target",
+    ],
+)
+
+cc_library(
+    name = "LLVMAOTTargetLinker",
+    hdrs = ["LLVMAOTTargetLinker.h"],
+    deps = [
+        "//iree/base:file_io",
+    ] + platform_trampoline_deps("LLVMAOTTargetLinker", "compiler/Dialect/HAL/Target/LLVM"),
+)
+
+cc_library(
+    name = "LLVMAOTTargetLinker_hdrs",
+    hdrs = ["LLVMAOTTargetLinker.h"],
+    deps = [
+        ":LLVMTargetOptions",
+        "//iree/base:file_io",
     ],
 )

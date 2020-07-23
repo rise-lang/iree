@@ -16,6 +16,7 @@
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -23,16 +24,25 @@ cc_library(
     name = "CodegenUtils",
     srcs = [
         "FunctionUtils.cpp",
-        "MarkerUtils.cpp",
+        "MatmulCodegenStrategy.cpp",
     ],
     hdrs = [
         "FunctionUtils.h",
-        "MarkerUtils.h",
+        "MatmulCodegenStrategy.h",
     ],
     deps = [
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:Affine",
+        "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:LinalgOps",
         "@llvm-project//mlir:LinalgTransforms",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:SCFDialect",
+        "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:Transforms",
+        "@llvm-project//mlir:VectorOps",
+        "@llvm-project//mlir:VectorToSCF",
     ],
 )

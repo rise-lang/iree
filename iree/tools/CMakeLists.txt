@@ -88,7 +88,7 @@ iree_cc_binary(
     ${IREE_HAL_DRIVER_MODULES}
 )
 
-if(${IREE_ENABLE_LLVM})
+if(${IREE_ENABLE_MLIR})
   iree_cc_binary(
     NAME
       iree-tblgen
@@ -101,6 +101,7 @@ if(${IREE_ENABLE_LLVM})
       iree::compiler::Dialect::VM::Tools
     LINKOPTS
       "-lpthread"
+    HOSTONLY
   )
 endif()
 
@@ -120,6 +121,7 @@ if(${IREE_BUILD_COMPILER})
       iree::compiler::Dialect::HAL::Transforms
       iree::compiler::Dialect::IREE::IR
       iree::compiler::Dialect::IREE::Transforms
+      iree::compiler::Dialect::Sequence::IR
       iree::compiler::Dialect::Shape::Conversion
       iree::compiler::Dialect::Shape::IR
       iree::compiler::Dialect::Shape::Transforms
@@ -143,7 +145,7 @@ if(${IREE_BUILD_COMPILER})
       MLIRAffineOps
       MLIRAffineTransforms
       MLIRGPU
-      MLIRGPUtoSPIRVTransforms
+      MLIRGPUToSPIRVTransforms
       MLIRIR
       MLIRLLVMIR
       MLIRLinalgOps
@@ -197,7 +199,7 @@ if(${IREE_BUILD_COMPILER})
     HDRS
       "init_xla_dialects.h"
     DEPS
-      tensorflow::mlir_xla
+      tensorflow::mlir_hlo
     PUBLIC
   )
 
@@ -240,6 +242,7 @@ if(${IREE_BUILD_COMPILER})
       iree::compiler::Dialect::HAL::Transforms
       iree::compiler::Dialect::IREE::IR
       iree::compiler::Dialect::IREE::Transforms
+      iree::compiler::Dialect::Sequence::IR
       iree::compiler::Dialect::Shape::IR
       iree::compiler::Dialect::Shape::Transforms
       iree::compiler::Dialect::VM::Analysis
@@ -251,7 +254,32 @@ if(${IREE_BUILD_COMPILER})
       iree::compiler::Dialect::VMLA::Transforms
       iree::compiler::Dialect::Vulkan::IR
       iree::compiler::Translation::IREEVM
-      tensorflow::mlir_xla
+      tensorflow::mlir_hlo
+    PUBLIC
+  )
+
+  iree_cc_library(
+    NAME
+      iree_translate_main
+    SRCS
+      "translate_main.cc"
+    DEPS
+      ::init_compiler_modules
+      ::init_iree_passes_and_dialects
+      ::init_mlir_passes_and_dialects
+      ::init_targets
+      ::init_translations
+      ::init_xla_dialects
+      LLVMSupport
+      MLIRIR
+      MLIRSCFTransforms
+      MLIRPass
+      MLIRSupport
+      MLIRTranslation
+      iree::compiler::Conversion::init_conversions
+      iree::compiler::Dialect::VM::Target::Bytecode
+      iree::compiler::Dialect::VM::Target::init_targets
+      iree::compiler::Translation::IREEVM
     PUBLIC
   )
 
@@ -262,6 +290,7 @@ if(${IREE_BUILD_COMPILER})
       iree-opt
     DEPS
       ::iree_opt_main
+    HOSTONLY
   )
 
   iree_cc_binary(
@@ -305,33 +334,14 @@ if(${IREE_BUILD_COMPILER})
       iree::vm::bytecode_module
       iree::vm::value
       ${IREE_HAL_DRIVER_MODULES}
+    HOSTONLY
   )
+endif(${IREE_BUILD_COMPILER})
 
-  iree_cc_library(
-    NAME
-      iree_translate_main
-    SRCS
-      "translate_main.cc"
-    DEPS
-      ::init_compiler_modules
-      ::init_iree_passes_and_dialects
-      ::init_mlir_passes_and_dialects
-      ::init_targets
-      ::init_translations
-      ::init_xla_dialects
-      LLVMSupport
-      MLIRIR
-      MLIRSCFTransforms
-      MLIRPass
-      MLIRSupport
-      MLIRTranslation
-      iree::compiler::Conversion::init_conversions
-      iree::compiler::Dialect::VM::Target::Bytecode
-      iree::compiler::Dialect::VM::Target::init_targets
-      iree::compiler::Translation::IREEVM
-    PUBLIC
-  )
-
+# If cross-compiling, we need to declare iree-translate under host configuration
+# unconditionally because we need to run it on host to generate VM modules
+# for tests.
+if(${IREE_BUILD_COMPILER} OR CMAKE_CROSSCOMPILING)
   iree_cc_binary(
     NAME
       iree-translate
@@ -339,6 +349,7 @@ if(${IREE_BUILD_COMPILER})
       iree-translate
     DEPS
       ::iree_translate_main
+    HOSTONLY
   )
 endif()
 
@@ -384,12 +395,14 @@ iree_cc_test(
     iree::vm::variant_list
 )
 
-if(${IREE_ENABLE_LLVM})
+if(${IREE_ENABLE_MLIR})
   add_custom_target(IreeFileCheck ALL
     COMMAND ${CMAKE_COMMAND} -E create_symlink ${CMAKE_CURRENT_SOURCE_DIR}/IreeFileCheck.sh IreeFileCheck
   )
-  add_custom_target(LLVMFileCheck ALL
-    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:FileCheck> FileCheck
-    DEPENDS FileCheck
-  )
+  if(${IREE_MLIR_DEP_MODE} STREQUAL "BUNDLED")
+    add_custom_target(LLVMFileCheck ALL
+      COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:FileCheck> FileCheck
+      DEPENDS FileCheck
+    )
+  endif()
 endif()

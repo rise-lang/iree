@@ -14,6 +14,7 @@
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -22,14 +23,21 @@ cc_library(
     srcs = [
         "ConvertToGPUPass.cpp",
         "ConvertToSPIRVPass.cpp",
+        "CooperativeMatrixAnalysis.cpp",
         "LinalgTileAndFusePass.cpp",
+        "MarkerUtils.cpp",
         "Passes.cpp",
         "SplitDispatchFunctionPass.cpp",
+        "Utils.cpp",
+        "VectorToGPUPass.cpp",
     ],
     hdrs = [
         "Attributes.h",
+        "CooperativeMatrixAnalysis.h",
+        "MarkerUtils.h",
         "MemorySpace.h",
         "Passes.h",
+        "Utils.h",
     ],
     deps = [
         "//iree/compiler/Conversion/CodegenUtils",
@@ -38,10 +46,10 @@ cc_library(
         "//iree/compiler/Dialect/IREE/IR",
         "//iree/compiler/Dialect/Shape/IR",
         "//iree/compiler/Dialect/Shape/Transforms",
-        "@llvm-project//llvm:support",
+        "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Affine",
         "@llvm-project//mlir:AffineToStandardTransforms",
-        "@llvm-project//mlir:EDSC",
+        "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:GPUDialect",
         "@llvm-project//mlir:GPUToSPIRVTransforms",
         "@llvm-project//mlir:GPUTransforms",
@@ -51,13 +59,15 @@ cc_library(
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:SCFDialect",
         "@llvm-project//mlir:SCFToGPUPass",
+        "@llvm-project//mlir:SCFToSPIRV",
         "@llvm-project//mlir:SPIRVDialect",
         "@llvm-project//mlir:SPIRVLowering",
         "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:StandardToSPIRVConversions",
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:Transforms",
-        "@org_tensorflow//tensorflow/compiler/mlir/xla:hlo",
-        "@org_tensorflow//tensorflow/compiler/mlir/xla:xla_legalize_to_linalg",
+        "@llvm-project//mlir:VectorOps",
+        "@org_tensorflow//tensorflow/compiler/mlir/hlo",
+        "@org_tensorflow//tensorflow/compiler/mlir/hlo:legalize_to_linalg",
     ],
 )

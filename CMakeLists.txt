@@ -23,18 +23,19 @@ if(POLICY CMP0079)
 endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-#-------------------------------------------------------------------------------
-# Project configuration
-#-------------------------------------------------------------------------------
-
 project(iree CXX C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 14)
 set(IREE_IDE_FOLDER IREE)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
+#-------------------------------------------------------------------------------
+# Project component configuration
+#-------------------------------------------------------------------------------
+
+# LINT.IfChange(iree_options)
 option(IREE_ENABLE_RUNTIME_TRACING "Enables instrumented runtime tracing." OFF)
-option(IREE_ENABLE_LLVM "Enables LLVM dependencies." ON)
+option(IREE_ENABLE_MLIR "Enables MLIR/LLVM dependencies." ON)
 option(IREE_ENABLE_EMITC "Enables MLIR EmitC dependencies." OFF)
 
 option(IREE_BUILD_COMPILER "Builds the IREE compiler." ON)
@@ -50,21 +51,36 @@ set(IREE_HAL_DRIVERS_TO_BUILD "all"
   CACHE STRING "Semicolon-separated list of HAL drivers to build, or \"all\"." FORCE)
 set(IREE_TARGET_BACKENDS_TO_BUILD "all"
   CACHE STRING "Semicolon-separated list of target backends to build, or \"all\"." FORCE)
+# LINT.ThenChange(
+#   https://github.com/google/iree/tree/main/build_tools/cmake/iree_cross_compile.cmake:iree_cross_compile_options,
+#   https://github.com/google/iree/tree/main/build_tools/cmake/iree_cross_compile.cmake:iree_cross_compile_invoke
+# )
 
 if(${IREE_BUILD_SAMPLES} OR ${IREE_BUILD_EXPERIMENTAL})
   set(IREE_BUILD_COMPILER ON CACHE BOOL "Build the IREE compiler for sample projects." FORCE)
 endif()
 
 if(${IREE_BUILD_COMPILER})
-  set(IREE_ENABLE_LLVM ON CACHE BOOL "Enable LLVM dependencies if the IREE compiler is build." FORCE)
+  set(IREE_ENABLE_MLIR ON CACHE BOOL "Enable LLVM dependencies if the IREE compiler is build." FORCE)
 endif()
 
-if(${IREE_ENABLE_EMITC} AND NOT ${IREE_ENABLE_LLVM})
-  message(FATAL_ERROR "Enabling EmitC requires setting IREE_ENABLE_LLVM to ON.")
+if (${IREE_ENABLE_MLIR})
+  set(IREE_MLIR_DEP_MODE "BUNDLED" CACHE STRING "One of BUNDLED (default), DISABLED, INSTALLED")
+endif()
+
+if(${IREE_ENABLE_EMITC})
+  if(NOT ${IREE_ENABLE_MLIR})
+    message(FATAL_ERROR "Enabling EmitC requires setting IREE_ENABLE_MLIR to ON.")
+  endif()
+
+  string(TOUPPER "${IREE_MLIR_DEP_MODE}" uppercase_IREE_MLIR_DEP_MODE)
+  if(NOT uppercase_IREE_MLIR_DEP_MODE MATCHES "^(BUNDLED|INSTALLED)$")
+    message(FATAL_ERROR "Enabling EmitC requires IREE_MLIR_DEP_MODE set to BUNDELED or INSTALLED.")
+  endif()
 endif()
 
 #-------------------------------------------------------------------------------
-# IREE-specific CMake configuration
+# Target and backend configuration
 #-------------------------------------------------------------------------------
 
 # List of all HAL drivers to be built by default:
@@ -118,12 +134,63 @@ foreach(_backend ${IREE_TARGET_BACKENDS_TO_BUILD})
   set(IREE_TARGET_BACKEND_${uppercase_backend} ON CACHE BOOL "" FORCE)
 endforeach()
 
-
 list(APPEND CMAKE_MODULE_PATH
   ${CMAKE_CURRENT_LIST_DIR}/build_tools/cmake/
   ${CMAKE_CURRENT_LIST_DIR}/bindings/python/build_tools/cmake/
   ${CMAKE_CURRENT_LIST_DIR}/third_party/abseil-cpp/absl/copts/
 )
+
+#-------------------------------------------------------------------------------
+# Cross compiling configuration
+#-------------------------------------------------------------------------------
+
+if(CMAKE_CROSSCOMPILING)
+  message(STATUS "Detected cross compilation mode; configuring IREE on host...")
+
+  # C/C++ compilers for host compilation.
+  # Note: we need to explicitly set this because IREE does not work well with
+  # GCC at the moment: https://github.com/google/iree/issues/1269
+  set(IREE_HOST_C_COMPILER "$ENV{IREE_HOST_C_COMPILER}" CACHE FILEPATH "C compiler for host compilation")
+  set(IREE_HOST_CXX_COMPILER "$ENV{IREE_HOST_CXX_COMPILER}" CACHE FILEPATH "C++ compiler for host compilation")
+
+  # Master configuration for the binary directory containing all artifacts
+  # compiled for host.
+  if(NOT IREE_HOST_BINARY_ROOT)
+    set(IREE_HOST_BINARY_ROOT "${CMAKE_CURRENT_BINARY_DIR}/host" CACHE FILEPATH "directory containing host artifacts")
+  endif()
+
+  set(IREE_HOST_BUILD_COMPILER ON) # For iree-translate
+  set(IREE_HOST_ENABLE_LLVM ON)    # For iree-tblgen
+
+  # Set the host build directory for LLVM to our directory. Otherwise it will
+  # follow its own convention.
+  set(LLVM_NATIVE_BUILD
+      "${IREE_HOST_BINARY_ROOT}/third_party/llvm-project/llvm"
+      CACHE FILEPATH "directory containing host artifacts for LLVM"
+  )
+
+  # And set host C/C++ compiler for LLVM. This makes cross compilation using
+  # Windows as the host platform nicer. Because we have various development
+  # evnironments on Windows (CMD, Cygwin, MSYS, etc.), LLVM can have problems
+  # figuring out the host triple and toolchain. We are passing in the host
+  # C/C++ compiler toolchain for IREE anyway; so we can give LLVM side some
+  # help here. This hides some complexity and ugliness from the users.
+  set(CROSS_TOOLCHAIN_FLAGS_NATIVE
+      "-DCMAKE_C_COMPILER=\"${IREE_HOST_C_COMPILER}\";-DCMAKE_CXX_COMPILER=\"${IREE_HOST_CXX_COMPILER}\""
+      CACHE FILEPATH "LLVM toolchain configuration for host build"
+  )
+
+  include(iree_cross_compile)
+
+  # Use another CMake invocation to configure a build for host.
+  iree_create_configuration(HOST)
+
+  message(STATUS "Done configuring IREE on host in ${IREE_HOST_BINARY_ROOT}")
+endif()
+
+#-------------------------------------------------------------------------------
+# IREE utility definitions
+#-------------------------------------------------------------------------------
 
 include(iree_macros)
 include(iree_copts)
@@ -142,6 +209,22 @@ include(iree_lit_test)
 include(iree_add_all_subdirs)
 include(iree_check_test)
 
+set(DEFAULT_CMAKE_BUILD_TYPE "Release")
+if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  message(STATUS "No build type selected, default to ${DEFAULT_CMAKE_BUILD_TYPE}")
+  set(CMAKE_BUILD_TYPE "${DEFAULT_CMAKE_BUILD_TYPE}" CACHE STRING "Build type (default ${DEFAULT_CMAKE_BUILD_TYPE})" FORCE)
+endif()
+
+set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
+
+#-------------------------------------------------------------------------------
+# IREE compilation toolchain configuration
+#-------------------------------------------------------------------------------
+
+# Enable using lld as the linker for C/C++ targets. This affects IREE and all
+# dependency projects.
+option(IREE_ENABLE_LLD "Use lld when linking" OFF)
+
 string(JOIN " " CMAKE_CXX_FLAGS ${IREE_DEFAULT_COPTS})
 
 set(CMAKE_CXX_FLAGS_FASTBUILD "-gmlt" CACHE STRING "Flags used by the C++ compiler during fast builds." FORCE)
@@ -155,16 +238,85 @@ mark_as_advanced(
   CMAKE_SHARED_LINKER_FLAGS_FASTBUILD
 )
 
-set(DEFAULT_CMAKE_BUILD_TYPE "Release")
-if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  message(STATUS "No build type selected, default to ${DEFAULT_CMAKE_BUILD_TYPE}")
-  set(CMAKE_BUILD_TYPE "${DEFAULT_CMAKE_BUILD_TYPE}" CACHE STRING "Build type (default ${DEFAULT_CMAKE_BUILD_TYPE})" FORCE)
-endif()
-
-set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
+include(iree_setup_toolchain)
 
 #-------------------------------------------------------------------------------
-# Third-party dependencies
+# MLIR/LLVM Dependency
+# We treat the LLVM dependency specially because we support several different
+# ways to use it:
+#   - Bundled (default): a source dependency directly on the
+#     third_party/llvm-project submodule.
+#   - External: An external (source or installed) dependency on LLVM.
+#   - Provided: When IREE is used as a sub-project, it is assumed that the LLVM
+#     dependency is added prior to including this configuration.
+#-------------------------------------------------------------------------------
+
+
+# Adds bundled projects that must be included after the LLVM directory has
+# been added and within the scope of its settings (i.e. build type override,
+# etc).
+function(add_bundled_mlir_dependent_projects)
+  if(${IREE_ENABLE_EMITC})
+  add_subdirectory(third_party/mlir-emitc EXCLUDE_FROM_ALL)
+  endif()
+endfunction()
+
+function(add_iree_mlir_src_dep llvm_monorepo_path)
+  # If CMAKE_BUILD_TYPE is FastBuild, set to Debug for llvm
+  set(_CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+  string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
+  if(NOT uppercase_CMAKE_BUILD_TYPE MATCHES "^(DEBUG|RELEASE|RELWITHDEBINFO|MINSIZEREL)$")
+    set(CMAKE_BUILD_TYPE "Debug")
+  endif()
+
+  # experimental model builder uses vulkan runner.
+  if(${IREE_BUILD_EXPERIMENTAL})
+    set(MLIR_VULKAN_RUNNER_ENABLED ON)
+  endif()
+
+  add_subdirectory("${llvm_monorepo_path}/llvm" "third_party/llvm-project/llvm" EXCLUDE_FROM_ALL)
+
+  # Reset CMAKE_BUILD_TYPE to its previous setting
+  set(CMAKE_BUILD_TYPE "${_CMAKE_BUILD_TYPE}" CACHE STRING "Build type (default ${DEFAULT_CMAKE_BUILD_TYPE})" FORCE)
+endfunction()
+
+if(${IREE_ENABLE_MLIR})
+  if(${IREE_MLIR_DEP_MODE} STREQUAL "DISABLED")
+    message(STATUS "Not adding MLIR/LLVM dep due to IREE_MLIR_DEP_MODE=DISABLED")
+  elseif(${IREE_MLIR_DEP_MODE} STREQUAL "BUNDLED")
+    # TODO: See iree_copts.cmake where it sets include directories for this
+    # case. This should be cleaned up to be all in one place or the other for
+    # all modes.
+    message(STATUS "Adding bundled LLVM source dependency")
+    add_iree_mlir_src_dep("third_party/llvm-project")
+  elseif(${IREE_MLIR_DEP_MODE} STREQUAL "INSTALLED")
+    message(STATUS "Looking for installed MLIR/LLVM packages (configure with MLIR_DIR variable)")
+    find_package(MLIR REQUIRED CONFIG)
+    message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
+    message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+    list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+    list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+    include(TableGen)
+    include(AddLLVM)
+    include(AddMLIR)
+    include(HandleLLVMOptions)
+
+    # Add include/link directories
+    include_directories(${LLVM_INCLUDE_DIRS})
+    include_directories(${MLIR_INCLUDE_DIRS})
+    link_directories(${LLVM_BUILD_LIBRARY_DIR})
+    add_definitions(${LLVM_DEFINITIONS})
+  else()
+    message(FATAL "Unsupported IREE_MLIR_DEP_MODE=${IREE_MLIR_DEP_MODE}")
+  endif()
+
+  include(external_tablegen_library)
+  add_bundled_mlir_dependent_projects()
+endif()
+
+
+#-------------------------------------------------------------------------------
+# Non-LLVM Dependencies
 #-------------------------------------------------------------------------------
 
 # Use the (deprecated) FindPythonInterp/FindPythonLibs functions before
@@ -193,31 +345,29 @@ add_subdirectory(third_party/googletest EXCLUDE_FROM_ALL)
 add_subdirectory(third_party/abseil-cpp EXCLUDE_FROM_ALL)
 add_subdirectory(third_party/flatbuffers EXCLUDE_FROM_ALL)
 add_subdirectory(third_party/vulkan_headers EXCLUDE_FROM_ALL)
-add_subdirectory(third_party/vulkan_extensionlayer EXCLUDE_FROM_ALL)
 add_subdirectory(build_tools/third_party/renderdoc_api EXCLUDE_FROM_ALL)
-add_subdirectory(build_tools/third_party/vulkan_extensionlayer EXCLUDE_FROM_ALL)
 
-if(${IREE_ENABLE_LLVM})
-  # If CMAKE_BUILD_TYPE is FastBuild, set to Debug for llvm
-  set(_CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
-  string(TOUPPER "${CMAKE_BUILD_TYPE}" uppercase_CMAKE_BUILD_TYPE)
-  if(NOT uppercase_CMAKE_BUILD_TYPE MATCHES "^(DEBUG|RELEASE|RELWITHDEBINFO|MINSIZEREL)$")
-    set(CMAKE_BUILD_TYPE "Debug")
-  endif()
+if(CMAKE_CROSSCOMPILING)
+  # We need flatc to generate some source code. When cross-compiling, we need
+  # to make sure the flatc binary is configured under host environment.
+  iree_declare_host_excutable(flatc BUILDONLY)
 
-  add_subdirectory(third_party/llvm-project/llvm EXCLUDE_FROM_ALL)
-  if(${IREE_ENABLE_EMITC})
-    add_subdirectory(third_party/mlir-emitc EXCLUDE_FROM_ALL)
-  endif()
+  # Set the FLATBUFFERS_FLATC_EXECUTABLE. It controls where to find the flatc
+  # binary in BuildFlatBuffers().
+  iree_get_executable_path(FLATBUFFERS_FLATC_EXECUTABLE flatc)
 
-  # Reset CMAKE_BUILD_TYPE to its previous setting
-  set(CMAKE_BUILD_TYPE "${_CMAKE_BUILD_TYPE}" CACHE STRING "Build type (default ${DEFAULT_CMAKE_BUILD_TYPE})" FORCE)
-
-  include(external_tablegen_library)
+  # Add a custom target to copy the flatc to the binary directory.
+  add_custom_target(iree_host_flatc
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+      "${IREE_HOST_BINARY_ROOT}/third_party/flatbuffers/flatc${IREE_HOST_EXECUTABLE_SUFFIX}"
+      "${IREE_HOST_BINARY_ROOT}/bin"
+    DEPENDS iree_host_build_flatc
+    COMMENT "Installing host flatc..."
+  )
 endif()
 
 if(${IREE_BUILD_COMPILER})
-  add_subdirectory(build_tools/third_party/tensorflow/tensorflow/compiler/mlir/xla EXCLUDE_FROM_ALL)
+  add_subdirectory(build_tools/third_party/tensorflow/tensorflow/compiler/mlir/hlo EXCLUDE_FROM_ALL)
 endif()
 
 if(${IREE_BUILD_DEBUGGER} OR ${IREE_BUILD_SAMPLES})
@@ -264,14 +414,14 @@ add_subdirectory(iree/schemas)
 add_subdirectory(iree/testing)
 add_subdirectory(iree/test)
 
-if(${IREE_ENABLE_LLVM})
+if(${IREE_ENABLE_MLIR})
   # The VM requires LLVM to build its op definitions.
   add_subdirectory(iree/vm)
 endif()
 
 if(${IREE_BUILD_COMPILER})
   add_subdirectory(iree/compiler)
-elseif(${IREE_ENABLE_LLVM})
+elseif(${IREE_ENABLE_MLIR})
   # If not building the compiler, tablegen is still needed
   # to generate vm ops so deep include it only.
   add_subdirectory(iree/compiler/Dialect/IREE/Tools)
@@ -297,3 +447,6 @@ iree_complete_binary_link_options()
 if(${IREE_BUILD_PYTHON_BINDINGS})
   iree_complete_py_extension_link_options()
 endif()
+
+set(IREE_PUBLIC_INCLUDE_DIRS "${IREE_COMMON_INCLUDE_DIRS}"
+    CACHE INTERNAL "IREE: Include Directories" FORCE)

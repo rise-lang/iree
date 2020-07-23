@@ -14,10 +14,12 @@
 
 # Common types and utilities used in the IREE codebase.
 
+load("//build_tools/embed_data:build_defs.bzl", "cc_embed_data")
 load("//iree:build_defs.oss.bzl", "platform_trampoline_deps")
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
@@ -154,6 +156,37 @@ cc_library(
         ":tracing",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_binary(
+    name = "dynamic_library_test_library.so",
+    testonly = True,
+    srcs = ["dynamic_library_test_library.cc"],
+    linkshared = True,
+)
+
+cc_embed_data(
+    name = "dynamic_library_test_library",
+    testonly = True,
+    srcs = [":dynamic_library_test_library.so"],
+    cc_file_output = "dynamic_library_test_library_embed.cc",
+    cpp_namespace = "iree",
+    flatten = True,
+    h_file_output = "dynamic_library_test_library_embed.h",
+)
+
+cc_test(
+    name = "dynamic_library_test",
+    srcs = ["dynamic_library_test.cc"],
+    deps = [
+        ":dynamic_library",
+        ":dynamic_library_test_library",
+        ":file_io",
+        ":status",
+        ":status_matchers",
+        ":target_platform",
+        "//iree/testing:gtest_main",
     ],
 )
 

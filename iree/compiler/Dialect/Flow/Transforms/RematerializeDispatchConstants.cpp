@@ -28,7 +28,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/Utils.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -60,7 +60,7 @@ bool canDispatchRegionContainConstants(DispatchRegionOp dispatchRegionOp) {
   for (auto &block : dispatchRegionOp.body()) {
     for (auto &op : block) {
       // TODO(b/144530470): replace with tablegen attributes/interfaces.
-      if (isa<xla_hlo::DotOp>(&op) || isa<xla_hlo::ConvOp>(&op)) {
+      if (isa<mhlo::DotOp>(&op) || isa<mhlo::ConvOp>(&op)) {
         // These two generally result in a lot of generated code so we try to
         // keep constants out such that can dedupe more. We may still want to
         // allow some parameters in (shapes/etc).

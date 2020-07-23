@@ -24,11 +24,13 @@ load(
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
+# TODO(meadowlark): Refactor this rule to match iree_vision_test_suite.bzl
 iree_train_test_suite(
-    name = "keras_model_train",
+    name = "train_tests",
     configurations = [
         # tuples of (optimizer, backends)
         ("sgd", "tf"),
@@ -36,7 +38,6 @@ iree_train_test_suite(
     tags = [
         "guitar",
         "manual",
-        "noga",
         "nokokoro",
         "notap",
     ],
@@ -46,7 +47,7 @@ iree_train_test_suite(
 )
 
 iree_train_test_suite(
-    name = "keras_model_train_failing",
+    name = "train_tests_failing",
     configurations = [
         # tuples of (optimizer, backends)
         # TODO: Combine this suite with keras_model_train once these tests pass.
@@ -55,7 +56,6 @@ iree_train_test_suite(
     ],
     tags = [
         "manual",
-        "noga",
         "nokokoro",
         "notap",
     ],

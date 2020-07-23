@@ -20,7 +20,7 @@
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/BlockAndValueMapping.h"
 #include "mlir/IR/Builders.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
 
 namespace mlir {
 namespace iree_compiler {
@@ -32,7 +32,7 @@ bool isOpOfKnownDialect(Operation *op) {
   // TODO(benvanik): replace with op dispatchability interface to allow dialects
   // to opt into dispatch.
   auto dialectNamespace = op->getDialect()->getNamespace();
-  return dialectNamespace == xla_hlo::XlaHloDialect::getDialectNamespace() ||
+  return dialectNamespace == mhlo::MhloDialect::getDialectNamespace() ||
          dialectNamespace == mlir::StandardOpsDialect::getDialectNamespace() ||
          dialectNamespace == FlowDialect::getDialectNamespace() ||
          dialectNamespace == ShapeDialect::getDialectNamespace();

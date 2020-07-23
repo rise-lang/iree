@@ -50,10 +50,10 @@ To run tests for the TensorFlow integration, which include end-to-end backend
 comparison tests:
 
 ```shell
-# Exclude tests that are skipped in the GitHub Actions ("ga") CI
+# Exclude tests that are skipped in the Kokoro CI
 $ bazel test \
-  --build_tag_filters="-noga" \
-  --test_tag_filters="-noga" \
+  --build_tag_filters="-nokokoro" \
+  --test_tag_filters="-nokokoro" \
   --define=iree_tensorflow=true \
   integrations/tensorflow/...
 ```
@@ -61,9 +61,8 @@ $ bazel test \
 ## Using Colab
 
 See
-[start_colab_kernel.py](https://github.com/google/iree/blob/master/colab/start_colab_kernel.py)
-and
-[Using Colab](https://github.com/google/iree/blob/master/docs/using_colab.md)
+[start_colab_kernel.py](https://github.com/google/iree/blob/main/colab/start_colab_kernel.py)
+and [Using Colab](https://github.com/google/iree/blob/main/docs/using_colab.md)
 for setup instructions, then take a look through the
-[Colab directory](https://github.com/google/iree/tree/master/colab) for some
+[Colab directory](https://github.com/google/iree/tree/main/colab) for some
 sample notebooks.

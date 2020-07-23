@@ -14,13 +14,27 @@
 
 iree_add_all_subdirs()
 
+iree_cc_library(
+  NAME
+    builtin_types
+  HDRS
+    "builtin_types.h"
+  SRCS
+    "builtin_types.c"
+  DEPS
+    ::list
+    ::ref
+    iree::base::api
+  PUBLIC
+)
+
 iree_cc_test(
   NAME
     bytecode_dispatch_test
   SRCS
     "bytecode_dispatch_test.cc"
   DEPS
-    ::bytecode_dispatch_test_module_cc
+    ::builtin_types
     ::bytecode_module
     ::context
     ::instance
@@ -29,18 +43,7 @@ iree_cc_test(
     absl::strings
     iree::base::logging
     iree::testing::gtest_main
-)
-
-iree_bytecode_module(
-  NAME
-    bytecode_dispatch_test_module
-  SRC
-    "bytecode_dispatch_test.mlir"
-  CC_NAMESPACE
-    "iree::vm"
-  FLAGS
-    "-iree-vm-ir-to-bytecode-module"
-  PUBLIC
+    iree::vm::test::all_bytecode_modules_cc
 )
 
 iree_cc_library(
@@ -54,11 +57,14 @@ iree_cc_library(
     "bytecode_module_impl.h"
     "bytecode_op_table.h"
   DEPS
+    ::builtin_types
+    ::list
     ::module
     ::ref
     ::stack
-    ::types
+    ::type_def
     ::value
+    absl::strings
     flatbuffers
     iree::base::alignment
     iree::base::api
@@ -132,6 +138,7 @@ iree_cc_library(
     ::stack
     iree::base::api
     iree::base::atomics
+    iree::base::tracing
   PUBLIC
 )
 
@@ -143,7 +150,7 @@ iree_cc_library(
   SRCS
     "instance.c"
   DEPS
-    ::types
+    ::builtin_types
     iree::base::api
     iree::base::atomics
   PUBLIC
@@ -161,7 +168,37 @@ iree_cc_library(
     ::module
     ::variant_list
     iree::base::api
+    iree::base::tracing
   PUBLIC
+)
+
+iree_cc_library(
+  NAME
+    list
+  HDRS
+    "list.h"
+  SRCS
+    "list.c"
+  DEPS
+    ::ref
+    ::type_def
+    ::value
+    iree::base::alignment
+    iree::base::api
+  PUBLIC
+)
+
+iree_cc_test(
+  NAME
+    list_test
+  SRCS
+    "list_test.cc"
+  DEPS
+    ::builtin_types
+    ::list
+    iree::base::api
+    iree::base::ref_ptr
+    iree::testing::gtest_main
 )
 
 iree_cc_library(
@@ -172,6 +209,7 @@ iree_cc_library(
   SRCS
     "module.c"
   DEPS
+    iree::base::alignment
     iree::base::api
     iree::base::atomics
   PUBLIC
@@ -184,11 +222,11 @@ iree_cc_library(
     "module_abi_cc.h"
     "module_abi_packing.h"
   DEPS
+    ::builtin_types
     ::module
     ::ref
     ::ref_cc
     ::stack
-    ::types
     absl::span
     absl::strings
     iree::base::api
@@ -230,7 +268,6 @@ iree_cc_library(
     "ref_cc.h"
   DEPS
     ::ref
-    ::types
     absl::core_headers
     iree::base::api
   PUBLIC
@@ -246,8 +283,10 @@ iree_cc_library(
   DEPS
     ::module
     ::ref
+    ::variant_list
     iree::base::alignment
     iree::base::api
+    iree::base::tracing
   PUBLIC
 )
 
@@ -266,14 +305,12 @@ iree_cc_test(
 
 iree_cc_library(
   NAME
-    types
+    type_def
   HDRS
-    "types.h"
-  SRCS
-    "types.c"
+    "type_def.h"
   DEPS
     ::ref
-    iree::base::api
+    ::value
   PUBLIC
 )
 
@@ -304,13 +341,15 @@ iree_cc_library(
   HDRS
     "api.h"
   DEPS
+    ::builtin_types
     ::context
     ::instance
     ::invocation
+    ::list
     ::module
     ::ref
     ::stack
-    ::types
+    ::type_def
     ::value
     ::variant_list
     iree::base::api

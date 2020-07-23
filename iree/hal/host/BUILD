@@ -17,38 +17,33 @@
 
 package(
     default_visibility = ["//visibility:public"],
+    features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
 )
 
 cc_library(
-    name = "async_command_queue",
-    srcs = ["async_command_queue.cc"],
-    hdrs = ["async_command_queue.h"],
+    name = "condvar_semaphore",
+    srcs = ["condvar_semaphore.cc"],
+    hdrs = ["condvar_semaphore.h"],
     deps = [
-        ":host_submission_queue",
         "//iree/base:status",
         "//iree/base:tracing",
-        "//iree/hal:command_queue",
         "//iree/hal:semaphore",
         "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
 cc_test(
-    name = "async_command_queue_test",
-    srcs = ["async_command_queue_test.cc"],
+    name = "condvar_semaphore_test",
+    srcs = ["condvar_semaphore_test.cc"],
     deps = [
-        ":async_command_queue",
-        ":host_submission_queue",
+        ":condvar_semaphore",
         "//iree/base:status",
         "//iree/base:status_matchers",
-        "//iree/base:time",
-        "//iree/hal:command_queue",
-        "//iree/hal/testing:mock_command_buffer",
-        "//iree/hal/testing:mock_command_queue",
         "//iree/testing:gtest_main",
-        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/time",
     ],
 )
@@ -77,11 +72,12 @@ cc_library(
 )
 
 cc_library(
-    name = "host_event",
-    srcs = ["host_event.cc"],
-    hdrs = ["host_event.h"],
+    name = "host_executable",
+    hdrs = ["host_executable.h"],
     deps = [
-        "//iree/hal:event",
+        "//iree/base:status",
+        "//iree/hal:descriptor_set",
+        "//iree/hal:executable",
     ],
 )
 
@@ -112,69 +108,23 @@ cc_library(
 )
 
 cc_library(
-    name = "host_local_command_processor",
-    srcs = ["host_local_command_processor.cc"],
-    hdrs = ["host_local_command_processor.h"],
+    name = "host_local_device",
+    srcs = ["host_local_device.cc"],
+    hdrs = ["host_local_device.h"],
     deps = [
         ":host_descriptor_set",
         ":host_executable_layout",
-        "//iree/base:source_location",
+        ":host_local_allocator",
+        ":scheduling_model",
+        "//iree/base:memory",
         "//iree/base:status",
         "//iree/base:tracing",
-        "//iree/hal:command_buffer",
-        "@com_google_absl//absl/container:inlined_vector",
-    ],
-)
-
-cc_library(
-    name = "host_semaphore",
-    srcs = ["host_semaphore.cc"],
-    hdrs = ["host_semaphore.h"],
-    deps = [
-        "//iree/base:status",
-        "//iree/base:tracing",
-        "//iree/hal:semaphore",
+        "//iree/hal:allocator",
+        "//iree/hal:command_buffer_validation",
+        "//iree/hal:device",
         "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/container:inlined_vector",
-        "@com_google_absl//absl/synchronization",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/types:span",
-    ],
-)
-
-cc_test(
-    name = "host_semaphore_test",
-    srcs = ["host_semaphore_test.cc"],
-    deps = [
-        ":host_semaphore",
-        "//iree/base:status",
-        "//iree/base:status_matchers",
-        "//iree/testing:gtest_main",
-        "@com_google_absl//absl/time",
-    ],
-)
-
-cc_library(
-    name = "host_submission_queue",
-    srcs = ["host_submission_queue.cc"],
-    hdrs = ["host_submission_queue.h"],
-    deps = [
-        ":host_semaphore",
-        "//iree/base:intrusive_list",
-        "//iree/base:status",
-        "//iree/base:tracing",
-        "//iree/hal:command_queue",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/container:inlined_vector",
-        "@com_google_absl//absl/synchronization",
-    ],
-)
-
-cc_test(
-    name = "host_submission_queue_test",
-    srcs = ["host_submission_queue_test.cc"],
-    deps = [
-        ":host_submission_queue",
-        "//iree/testing:gtest_main",
     ],
 )
 
@@ -188,5 +138,22 @@ cc_library(
         "//iree/base:status",
         "//iree/base:tracing",
         "//iree/hal:command_buffer",
+    ],
+)
+
+cc_library(
+    name = "nop_event",
+    srcs = ["nop_event.cc"],
+    hdrs = ["nop_event.h"],
+    deps = [
+        "//iree/hal:event",
+    ],
+)
+
+cc_library(
+    name = "scheduling_model",
+    hdrs = ["scheduling_model.h"],
+    deps = [
+        "//iree/hal:command_queue",
     ],
 )

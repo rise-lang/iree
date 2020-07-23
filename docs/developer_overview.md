@@ -5,48 +5,48 @@ developers.
 
 ## Project Code Layout
 
-[iree/](https://github.com/google/iree/blob/master/iree/)
+[iree/](https://github.com/google/iree/blob/main/iree/)
 
 *   Core IREE project
 
-[integrations/](https://github.com/google/iree/blob/master/integrations/)
+[integrations/](https://github.com/google/iree/blob/main/integrations/)
 
 *   Integrations between IREE and other frameworks, such as TensorFlow
 
-[bindings/](https://github.com/google/iree/blob/master/bindings/)
+[bindings/](https://github.com/google/iree/blob/main/bindings/)
 
 *   Language and platform bindings, such as Python
 
-[colab/](https://github.com/google/iree/blob/master/colab/)
+[colab/](https://github.com/google/iree/blob/main/colab/)
 
 *   Colab notebooks for interactively using IREE's Python bindings
 
 ## IREE Code Layout
 
-[iree/base/](https://github.com/google/iree/blob/master/iree/base/)
+[iree/base/](https://github.com/google/iree/blob/main/iree/base/)
 
 *   Common types and utilities used throughout IREE
 
-[iree/compiler/](https://github.com/google/iree/blob/master/iree/compiler/)
+[iree/compiler/](https://github.com/google/iree/blob/main/iree/compiler/)
 
 *   IREE's MLIR dialects, LLVM compiler passes, module translation code, etc.
     Code here should not depend on anything in the runtime
 
-[iree/hal/](https://github.com/google/iree/blob/master/iree/hal/)
+[iree/hal/](https://github.com/google/iree/blob/main/iree/hal/)
 
 *   **H**ardware **A**bstraction **L**ayer for IREE's runtime, with
     implementations for hardware and software backends
 
-[iree/schemas/](https://github.com/google/iree/blob/master/iree/schemas/)
+[iree/schemas/](https://github.com/google/iree/blob/main/iree/schemas/)
 
 *   Shared data storage format definitions, primarily using
     [FlatBuffers](https://google.github.io/flatbuffers/)
 
-[iree/tools/](https://github.com/google/iree/blob/master/iree/tools/)
+[iree/tools/](https://github.com/google/iree/blob/main/iree/tools/)
 
 *   Assorted tools used to optimize, translate, and evaluate IREE
 
-[iree/vm/](https://github.com/google/iree/blob/master/iree/vm/)
+[iree/vm/](https://github.com/google/iree/blob/main/iree/vm/)
 
 *   Bytecode **V**irtual **M**achine used to work with IREE modules and invoke
     IREE functions
@@ -56,7 +56,7 @@ developers.
 IREE's compiler components accept programs and code fragments in several
 formats, including high level TensorFlow Python code, serialized TensorFlow
 [SavedModel](https://www.tensorflow.org/guide/saved_model) programs, and lower
-level textual MLIR files using combinations of supported dialects like `xla_hlo`
+level textual MLIR files using combinations of supported dialects like `mhlo`
 and IREE's internal dialects. While input programs are ultimately compiled down
 to modules suitable for running on some combination of IREE's target deployment
 platforms, IREE's developer tools can run individual compiler passes,
@@ -68,28 +68,39 @@ translations, and other transformations step by step.
 [mlir-opt](https://github.com/llvm/llvm-project/tree/master/mlir/tools/mlir-opt)
 and runs sets of IREE's compiler passes on `.mlir` input files. See "conversion"
 in [MLIR's Glossary](https://mlir.llvm.org/getting_started/Glossary/#conversion)
-for more information.
+for more information. Transformations performed by `iree-opt` can range from
+individual passes performing isolated manipulations to broad pipelines that
+encompass a sequence of steps.
 
 Test `.mlir` files that are checked in typically include a `RUN` block at the
 top of the file that specifies which passes should be performed and if
 `FileCheck` should be used to test the generated output.
 
-For example, to run some passes on the
-[reshape.mlir](https://github.com/google/iree/blob/master/iree/compiler/Translation/SPIRV/XLAToSPIRV/test/reshape.mlir)
-test file:
+Here's an example of a small compiler pass running on a
+[test file](https://github.com/google/iree/blob/main/iree/compiler/Dialect/IREE/Transforms/test/drop_compiler_hints.mlir):
 
 ```shell
 $ bazel run iree/tools:iree-opt -- \
   -split-input-file \
-  -iree-index-computation \
-  -simplify-spirv-affine-exprs=false \
-  -convert-iree-to-spirv \
-  -verify-diagnostics \
-  $PWD/iree/compiler/Translation/SPIRV/XLAToSPIRV/test/reshape.mlir
+  -print-ir-before-all \
+  -iree-drop-compiler-hints \
+  $PWD/iree/compiler/Dialect/IREE/Transforms/test/drop_compiler_hints.mlir
+```
+
+For a more complex example, here's how to run IREE's complete transformation
+pipeline targeting the VMLA backend on the
+[fullyconnected.mlir](https://github.com/google/iree/blob/main/iree/test/e2e/models/fullyconnected.mlir)
+model file:
+
+```shell
+$ bazel run iree/tools:iree-opt -- \
+  -iree-transformation-pipeline \
+  -iree-hal-target-backends=vmla \
+  $PWD/iree/test/e2e/models/fullyconnected.mlir
 ```
 
 Custom passes may also be layered on top of `iree-opt`, see
-[iree/samples/custom_modules/dialect](https://github.com/google/iree/blob/master/iree/samples/custom_modules/dialect)
+[iree/samples/custom_modules/dialect](https://github.com/google/iree/blob/main/iree/samples/custom_modules/dialect)
 for a sample.
 
 ### iree-translate
@@ -112,7 +123,7 @@ $ bazel run iree/tools:iree-translate -- \
 ```
 
 Custom translations may also be layered on top of `iree-translate`, see
-[iree/samples/custom_modules/dialect](https://github.com/google/iree/blob/master/iree/samples/custom_modules/dialect)
+[iree/samples/custom_modules/dialect](https://github.com/google/iree/blob/main/iree/samples/custom_modules/dialect)
 for a sample.
 
 ### iree-run-module
@@ -139,7 +150,7 @@ The `iree-check-module` program takes an already translated IREE module as input
 and executes it as a series of
 [googletest](https://github.com/google/googletest) tests. This is the test
 runner for the IREE
-[check framework](https://github.com/google/iree/tree/master/docs/testing_guide.md#end-to-end-tests).
+[check framework](https://github.com/google/iree/tree/main/docs/testing_guide.md#end-to-end-tests).
 
 ```shell
 $ bazel run iree/tools:iree-translate -- \
@@ -165,7 +176,7 @@ does some additional work that usually must be explicit, like marking every
 function as exported by default and running all of them.
 
 For example, to execute the contents of
-[iree/tools/test/simple.mlir](https://github.com/google/iree/blob/master/iree/tools/test/simple.mlir):
+[iree/tools/test/simple.mlir](https://github.com/google/iree/blob/main/iree/tools/test/simple.mlir):
 
 ```shell
 $ bazel run iree/tools:iree-run-mlir -- \
@@ -199,7 +210,7 @@ error respectively.
 ### Useful Vulkan driver flags
 
 For IREE's Vulkan runtime driver, there are a few useful
-[flags](https://github.com/google/iree/blob/master/iree/hal/vulkan/vulkan_driver.cc):
+[flags](https://github.com/google/iree/blob/main/iree/hal/vulkan/vulkan_driver.cc):
 
 #### `--vulkan_renderdoc`
 

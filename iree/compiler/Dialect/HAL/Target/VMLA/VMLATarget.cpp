@@ -51,7 +51,7 @@ class VMLATargetBackend final : public TargetBackend {
                                     OpPassManager &passManager) override {
     IREE::VMLA::buildVMLATransformPassPipeline(passManager);
 
-    // TODO(GH-614): remove this when the std->vm conversion isn't looking for
+    // TODO(#614): remove this when the std->vm conversion isn't looking for
     // iree.module.export.
     passManager.addPass(IREE::VM::createMarkPublicSymbolsExportedPass());
 
@@ -90,6 +90,15 @@ class VMLATargetBackend final : public TargetBackend {
         std::move(bytes));
 
     return success();
+  }
+
+  std::array<Value, 3> calculateDispatchWorkgroupCount(
+      Location loc, IREE::HAL::ExecutableOp executableOp,
+      IREE::HAL::ExecutableEntryPointOp entryPointOp, Value workload,
+      OpBuilder &builder) override {
+    // For now we are not tiling and just dispatch everything as 1,1,1.
+    auto constantOne = builder.createOrFold<mlir::ConstantIndexOp>(loc, 1);
+    return {constantOne, constantOne, constantOne};
   }
 
  private:

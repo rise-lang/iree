@@ -19,9 +19,9 @@
 #define IREE_TOOLS_INIT_XLA_DIALECTS_H_
 
 #include "mlir/IR/Dialect.h"
-#include "tensorflow/compiler/mlir/xla/ir/chlo_ops.h"
-#include "tensorflow/compiler/mlir/xla/ir/hlo_ops.h"
-#include "tensorflow/compiler/mlir/xla/ir/lhlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/chlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/hlo_ops.h"
+#include "tensorflow/compiler/mlir/hlo/include/mlir-hlo/Dialect/mhlo/IR/lhlo_ops.h"
 
 namespace mlir {
 
@@ -29,9 +29,9 @@ namespace mlir {
 // all the possible dialects to be made available to the context automatically.
 inline void registerXLADialects() {
   static bool init_once = []() {
-    registerDialect<mlir::xla_hlo::XlaHloDialect>();
-    registerDialect<mlir::xla_chlo::XlaHloClientDialect>();
-    registerDialect<mlir::xla_lhlo::XlaLhloDialect>();
+    registerDialect<mlir::chlo::HloClientDialect>();
+    registerDialect<mlir::lmhlo::LmhloDialect>();
+    registerDialect<mlir::mhlo::MhloDialect>();
     return true;
   }();
   (void)init_once;
