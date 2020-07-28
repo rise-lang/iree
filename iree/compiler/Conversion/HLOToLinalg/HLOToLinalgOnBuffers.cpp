@@ -321,10 +321,12 @@ struct RiseDotOpConversion
             op.getLoc(), TypeRange{},
             ValueRange{inputBuffers[0], inputBuffers[1], resultBuffers[0]});
       } else {
-//        std::cout << "\nrise dot translation! for mm of A[" << lhsShape[0]
-//                  << "," << lhsShape[1] << "], B[" << rhsShape[0] << ","
-//                  << rhsShape[1] << "]\n\n"
-//                  << std::flush;
+        //        std::cout << "\nrise dot translation! for mm of A[" <<
+        //        lhsShape[0]
+        //                  << "," << lhsShape[1] << "], B[" << rhsShape[0] <<
+        //                  ","
+        //                  << rhsShape[1] << "]\n\n"
+        //                  << std::flush;
 
         OpBuilder builder(op);
         edsc::ScopedContext scope(builder, op.getLoc());
@@ -349,10 +351,12 @@ struct RiseDotOpConversion
         //        builder.setInsertionPointToStart(riseFunBlock);
         //
         /////////////////////// insert rise program here ///////////////////////
-
-        mlir::edsc::highlevel::matrix_multiplication(
-            lhsShape[0], lhsShape[1], rhsShape[1], inputBuffers[0],
-            inputBuffers[1], resultBuffers[0]);
+        mlir::edsc::highlevel::makeRiseProgram(
+            inputBuffers[0], inputBuffers[1], resultBuffers[0],
+            [&](Value A, Value B) {
+              return mlir::edsc::highlevel::matrix_multiplication(
+                  lhsShape[0], lhsShape[1], rhsShape[1], A, B);
+            });
 
         //        generateRiseMM(builder, op.getLoc(), lhsShape[0], lhsShape[1],
         //                       rhsShape[1], inputBuffers[0], inputBuffers[1],
@@ -501,23 +505,9 @@ LogicalResult RiseConvOpConversion::apply(
   using namespace mlir::edsc::abstraction;
   using namespace mlir::edsc::highlevel;
 
-//  std::cout << "\nrise conv translation! "
-//            << "\n\n"
-//            << std::flush;
-
   OpBuilder builder(op);
   edsc::ScopedContext scope(builder, op.getLoc());
 
-  //    Value input = in(inputBuffers[0], array2DType(3, 5, array2DType(5, 3,
-  //    scalarF32Type())));
-  //
-  //    mapSeq2D(array2DType(5, 3, scalarF32Type()), [](BlockArgument arr2D) {
-  //      return mapSeq2D(scalarF32Type(), [](BlockArgument elem){
-  //            return embed1(scalarF32Type(), elem, [](BlockArgument elem){
-  //                return elem + elem - elem;
-  //                });
-  //          }, arr2D);
-  //    }, input);
   ArrayRef<int64_t> inShape =
       inputBuffers[0].getType().dyn_cast<MemRefType>().getShape();
   ArrayRef<int64_t> kernelShape =
@@ -525,60 +515,34 @@ LogicalResult RiseConvOpConversion::apply(
   ArrayRef<int64_t> resultShape =
       resultBuffers[0].getType().dyn_cast<MemRefType>().getShape();
 
-  //  ArrayType inputType = arrayType(inShape[inShape.size()-1],
-  //  scalarF32Type());
   DataType inputType = scalarF32Type();
   for (auto size = inShape.rbegin(); size != inShape.rend(); size++) {
     inputType = arrayType(*size, inputType);
   }
-//  inputType.dump();
-
   DataType kernelType = scalarF32Type();
   for (auto size = kernelShape.rbegin(); size != kernelShape.rend(); size++) {
     kernelType = arrayType(*size, kernelType);
   }
-//  kernelType.dump();
-
   DataType resultType = scalarF32Type();
   for (auto size = resultShape.rbegin(); size != resultShape.rend(); size++) {
     resultType = arrayType(*size, resultType);
   }
-//  resultType.dump();
 
   assert(inShape[0] == 1 && "batchsize 1 required!");
   assert(inShape[3] == 1 && "inner dimension has to be 1 currently!");
   assert(kernelShape[2] == 1 && "kernel shape incorrect");
   assert(kernelShape[3] == 1 && "kernel shape incorrect");
 
-  lowering_unit([&](){
-    Value input = in(inputBuffers[0], inputType);
-    Value kernel = in(inputBuffers[1], kernelType);
-
-    // preparing data
-    Value reshapedInput = join(map(
-        array2DType(inShape[1], inShape[2], scalarF32Type()),
-        [&](Value array) {
-          return map(
-              arrayType(inShape[2], scalarF32Type()),
-              [&](Value elem) { return join(elem); }, array);
-        },
-        input));
-
-    Value reshapedKernel = map(
-        arrayType(kernelShape[1], scalarF32Type()),
-        [&](Value array) { return join(join(array)); }, kernel);
-
-    Value conv = conv2DTF(reshapedInput, reshapedKernel);
-    conv.getType().dump();
-    out(resultBuffers[0], conv);
-  });
-
+  makeRiseProgram(inputBuffers[0], inputBuffers[1], resultBuffers[0],
+                  [&](Value input, Value kernel) {
+                    return conv2DTF(input, kernel);
+                  });
   return success();
 }
 //
- namespace {
+namespace {
 /// Converts mhlo.convolution operation to linalg.conv op.
- struct ConvOpConversion
+struct ConvOpConversion
     : public ConvertToLinalgBufferOp<ConvOpConversion, mhlo::ConvOp> {
   using ConvertToLinalgBufferOp<ConvOpConversion,
                                 mhlo::ConvOp>::ConvertToLinalgBufferOp;
@@ -588,10 +552,9 @@ LogicalResult RiseConvOpConversion::apply(
 };
 }  // namespace
 
- LogicalResult ConvOpConversion::apply(
+LogicalResult ConvOpConversion::apply(
     mhlo::ConvOp op, ArrayRef<Value> inputBuffers,
-    ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const
-    {
+    ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
   if (const auto dimensionNumbers = op.dimension_numbers()) {
     const int inputSpatialRank =
         llvm::size(dimensionNumbers.input_spatial_dimensions());
@@ -627,9 +590,8 @@ LogicalResult RiseConvOpConversion::apply(
         inputSpatialRank != kernelSpatialRank)
       return failure();
 
-    auto inputSpatialDim =
-    dimensionNumbers.input_spatial_dimensions().begin(); auto kernelSpatialDim
-    =
+    auto inputSpatialDim = dimensionNumbers.input_spatial_dimensions().begin();
+    auto kernelSpatialDim =
         dimensionNumbers.kernel_spatial_dimensions().begin();
     auto outputSpatialDim =
         dimensionNumbers.output_spatial_dimensions().begin();
@@ -671,8 +633,7 @@ LogicalResult RiseConvOpConversion::apply(
     rewriter.notifyMatchFailure(op, "failed to zero fill result buffer");
     return failure();
   }
-  rewriter.create<linalg::ConvOp>(op.getLoc(), inputBuffers[1],
-  inputBuffers[0],
+  rewriter.create<linalg::ConvOp>(op.getLoc(), inputBuffers[1], inputBuffers[0],
                                   resultBuffers[0], stridesArg, dilationArg,
                                   padding);
   return success();
@@ -1669,7 +1630,7 @@ void populateHLOToLinalgOnBuffersConversionPatterns(
     MLIRContext *context, OwningRewritePatternList &patterns,
     TensorToBufferMap const &resultTensorToBufferMap) {
   patterns.insert<
-//                    ConvOpConversion,
+      //                    ConvOpConversion,
       //        DotOpConversion<DotOperationType::MatrixMatrix,
       //        linalg::MatmulOp>,
       RiseConvOpConversion,
