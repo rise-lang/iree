@@ -321,81 +321,15 @@ struct RiseDotOpConversion
             op.getLoc(), TypeRange{},
             ValueRange{inputBuffers[0], inputBuffers[1], resultBuffers[0]});
       } else {
-        //        std::cout << "\nrise dot translation! for mm of A[" <<
-        //        lhsShape[0]
-        //                  << "," << lhsShape[1] << "], B[" << rhsShape[0] <<
-        //                  ","
-        //                  << rhsShape[1] << "]\n\n"
-        //                  << std::flush;
-
         OpBuilder builder(op);
         edsc::ScopedContext scope(builder, op.getLoc());
-        // setup
-        //        int inDims = 2;
-        //        int outDims = 2;
-        //        ArrayRef<int64_t> inShapes = {50, 50};
-        //        //{lhsShape[0],lhsShape[0]};
-        //        ArrayRef<int64_t> outShapes = {48, 46};
-        //        //{lhsShape[0] - 2, lhsShape[0] - 2};
-        //        Type elementType = FloatType::getF32(builder.getContext());
-        //
-        //        FuncOp riseFun = builder.create<FuncOp>(
-        //            op.getLoc(), StringRef("rise_fun"),
-        //            FunctionType::get({MemRefType::get(inShapes, elementType,
-        //            {}, 0),
-        //                               MemRefType::get(outShapes, elementType,
-        //                               {}, 0)},
-        //                              {}, builder.getContext()),
-        //            ArrayRef<NamedAttribute>{});
-        //        Block *riseFunBlock = riseFun.addEntryBlock();
-        //        builder.setInsertionPointToStart(riseFunBlock);
-        //
-        /////////////////////// insert rise program here ///////////////////////
+
         mlir::edsc::highlevel::makeRiseProgram(
-            inputBuffers[0], inputBuffers[1], resultBuffers[0],
-            [&](Value A, Value B) {
-              return mlir::edsc::highlevel::matrix_multiplication(
-                  lhsShape[0], lhsShape[1], rhsShape[1], A, B);
-            });
-
-        //        generateRiseMM(builder, op.getLoc(), lhsShape[0], lhsShape[1],
-        //                       rhsShape[1], inputBuffers[0], inputBuffers[1],
-        //                       resultBuffers[0]);
-
-        // Only to test generating expressions:
-        //        generateStencil(builder, op.getLoc(), lhsShape[0],
-        //        inputBuffers[0],
-        //                        resultBuffers[0]);
-
-        //        generate2DStencil(builder, op.getLoc(), 50,
-        //                          riseFunBlock->getArgument(0),
-        //                          riseFunBlock->getArgument(1));
-
-        ////////////////////////////////////////////////////////////////////////
-
-        //        builder.create<ReturnOp>(op.getLoc());
-        //
-        //        builder.setInsertionPointAfter(riseFun);
-        //        FuncOp testFun = builder.create<FuncOp>(
-        //            op.getLoc(), StringRef("test_fun"),
-        //            FunctionType::get({}, {}, builder.getContext()),
-        //            ArrayRef<NamedAttribute>{});
-        //        builder.setInsertionPointToStart(testFun.addEntryBlock());
-
-        ///////////////////////// specify test here ////////////////////////////
-
-        //        generateTest(builder, op.getLoc(), 2, inShapes, outShapes,
-        //        riseFun);
-
-        //        generateTest(builder, op.getLoc(), 1, {32}, {64});
-        //                generateTest(builder, op.getLoc(), 5, {2, 5, 8, 11,
-        //                12},
-        //                             {2, 5, 8, 11, 12});
-        //        builder.create<ReturnOp>(op.getLoc());
-        //
-        ////////////////////////////////////////////////////////////////////////
-
-        //        op.getParentOfType<FuncOp>().dump();
+            resultBuffers[0], inputBuffers[0],
+            inputBuffers[1])([&](Value A, Value B) {
+          return mlir::edsc::highlevel::matrix_multiplication(
+              lhsShape[0], lhsShape[1], rhsShape[1], A, B);
+        });
       }
       return success();
     }
@@ -533,10 +467,8 @@ LogicalResult RiseConvOpConversion::apply(
   assert(kernelShape[2] == 1 && "kernel shape incorrect");
   assert(kernelShape[3] == 1 && "kernel shape incorrect");
 
-  makeRiseProgram(inputBuffers[0], inputBuffers[1], resultBuffers[0],
-                  [&](Value input, Value kernel) {
-                    return conv2DTF(input, kernel);
-                  });
+  makeRiseProgram(resultBuffers[0], inputBuffers[0], inputBuffers[1])(
+      [&](Value input, Value kernel) { return conv2DTF(input, kernel); });
   return success();
 }
 //
