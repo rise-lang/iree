@@ -405,6 +405,15 @@ filegroup(
     ],
 )
 
+filegroup(
+    name = "RiseTdFiles",
+    srcs = [
+        "include/mlir/Dialect/Rise/IR/Rise.td",
+        "include/mlir/Interfaces/SideEffectInterfaces.td",
+        ":OpBaseTdFiles",
+    ],
+)
+
 gentbl(
     name = "StandardOpsIncGen",
     strip_include_prefix = "include",
@@ -434,6 +443,26 @@ gentbl(
     td_file = "include/mlir/Dialect/StandardOps/IR/Ops.td",
     td_srcs = [
         ":StdOpsTdFiles",
+    ],
+)
+
+gentbl(
+    name = "RiseOpsIncGen",
+    strip_include_prefix = "include",
+    tbl_outs = [
+        (
+            "-gen-op-decls",
+            "include/mlir/Dialect/Rise/IR/Rise.h.inc",
+        ),
+        (
+            "-gen-op-defs",
+            "include/mlir/Dialect/Rise/IR/Rise.cpp.inc",
+        ),
+    ],
+    tblgen = ":mlir-tblgen",
+    td_file = "include/mlir/Dialect/Rise/IR/Rise.td",
+    td_srcs = [
+        ":RiseTdFiles",
     ],
 )
 
@@ -467,6 +496,74 @@ cc_library(
         ":IR",
         ":Support",
         "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_library(
+    name = "Rise",
+    srcs = glob(
+        [
+            "lib/Dialect/Rise/IR/*.cpp",
+            "lib/Dialect/Rise/IR/*.h",
+            "lib/Dialect/Rise/EDSC/*.cpp",
+        ],
+    ),
+    hdrs = glob([
+        "include/mlir/Dialect/Rise/IR/*.h",
+        "include/mlir/Dialect/Rise/EDSC/*.h",
+        "include/mlir/Dialect/Rise/invoke.hpp",
+        "include/mlir/Dialect/Rise/variant.hpp",
+        "include/mlir/Dialect/Rise/Passes.h"
+    ]),
+    includes = ["include"],
+    deps = [
+        ":RiseOpsIncGen",
+        ":RisePassIncGen",
+        ":EDSC",
+        ":IR",
+        ":StandardOps",
+        ":Affine",
+        ":SCFDialect",
+        ":Transforms",
+        ":Support",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_library(
+    name = "RiseToImperative",
+    srcs = glob([
+        "lib/Conversion/RiseToImperative/*.cpp",
+    ]) + ["lib/Conversion/PassDetail.h"],
+    hdrs = glob(["include/mlir/Conversion/RiseToImperative/*.h"]),
+    includes = ["include"],
+    deps = [
+        ":Rise",
+        ":ConversionPassIncGen",
+        ":IR",
+        ":Pass",
+        ":SCFDialect",
+        ":StandardOps",
+        ":Affine",
+        ":Support",
+        ":Transforms",
+        ":VectorOps",
+    ],
+)
+
+gentbl(
+    name = "RisePassIncGen",
+    strip_include_prefix = "include",
+    tbl_outs = [
+        (
+            "-gen-pass-decls",
+            "include/mlir/Dialect/Rise/Passes.h.inc",
+        ),
+    ],
+    tblgen = ":mlir-tblgen",
+    td_file = "include/mlir/Dialect/Rise/Passes.td",
+    td_srcs = [
+        ":PassBaseTdFiles",
     ],
 )
 
