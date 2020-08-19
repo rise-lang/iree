@@ -25,6 +25,8 @@ cc_embed_data(
     name = "all_bytecode_modules_cc",
     srcs = [
         ":arithmetic_ops.module",
+        ":arithmetic_ops_i64.module",
+        ":comparison_ops.module",
         ":control_flow_ops.module",
         ":list_ops.module",
     ],
@@ -37,6 +39,18 @@ cc_embed_data(
 iree_bytecode_module(
     name = "arithmetic_ops",
     src = "arithmetic_ops.mlir",
+    flags = ["-iree-vm-ir-to-bytecode-module"],
+)
+
+iree_bytecode_module(
+    name = "arithmetic_ops_i64",
+    src = "arithmetic_ops_i64.mlir",
+    flags = ["-iree-vm-ir-to-bytecode-module"],
+)
+
+iree_bytecode_module(
+    name = "comparison_ops",
+    src = "comparison_ops.mlir",
     flags = ["-iree-vm-ir-to-bytecode-module"],
 )
 

@@ -24,10 +24,10 @@ import os
 import subprocess
 
 REFERENCE_BACKEND = 'tf'
-# Assumes that tests are expanded for the tf_also, iree_vmla, iree_llvmjit and
+# Assumes that tests are expanded for the tf, iree_vmla, iree_llvmjit and
 # iree_vulkan backends.
 BACKENDS_TO_TITLES = collections.OrderedDict([
-    ('tf_also', 'tensorflow'),
+    ('tf', 'tensorflow'),
     ('iree_vmla', 'vmla'),
     ('iree_llvmjit', 'llvm-ir'),
     ('iree_vulkan', 'vulkan-spirv'),
@@ -64,6 +64,7 @@ There are three backend [targets]({TARGETS_URL}) in IREE:
 - vulkan-spirv
 
 The table shows the supported TensorFlow functions and models on each backend.
+It is auto-generated from IREE's test status.
 
 """
 
@@ -172,7 +173,7 @@ if __name__ == '__main__':
     content.append(generate_table(test_suite))
   content = '\n\n'.join(content) + '\n'  # Trailing newline.
 
-  table_path = os.path.join(args.build_dir, 'doc', 'e2e_coverage.md')
+  table_path = os.path.join(args.build_dir, 'doc', 'tf_e2e_coverage.md')
   with open(table_path, 'w', encoding='utf-8') as f:
     f.write(E2E_COVERAGE_DESCRIPTION)
     f.write(content)

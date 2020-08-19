@@ -16,6 +16,12 @@
 #define IREE_VM_BYTECODE_MODULE_IMPL_H_
 
 #include <stdint.h>
+#include <string.h>
+
+// VC++ does not have C11's stdalign.h.
+#if !defined(_MSC_VER)
+#include <stdalign.h>
+#endif  // _MSC_VER
 
 #include "iree/base/api.h"
 #include "iree/vm/builtin_types.h"
@@ -25,17 +31,14 @@
 #include "iree/vm/type_def.h"
 #include "iree/vm/value.h"
 
+// NOTE: include order matters:
+#include "flatcc/reflection/flatbuffers_common_reader.h"
+#include "iree/schemas/bytecode_module_def_reader.h"
+#include "iree/schemas/bytecode_module_def_verifier.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif  // __cplusplus
-
-// Matches the FunctionDescriptor struct in the flatbuffer.
-typedef struct {
-  int32_t bytecode_offset;
-  int32_t bytecode_length;
-  uint16_t i32_register_count;
-  uint16_t ref_register_count;
-} iree_vm_function_descriptor_t;
 
 // A loaded bytecode module.
 typedef struct {
@@ -47,8 +50,9 @@ typedef struct {
   // Table of internal function bytecode descriptors.
   // Mapped 1:1 with internal functions. Each defined bytecode span represents a
   // range of bytes in |bytecode_data|.
-  int32_t function_descriptor_count;
-  const iree_vm_function_descriptor_t* function_descriptor_table;
+  iree_host_size_t function_descriptor_count;
+  const iree_vm_FunctionDescriptor_t* function_descriptor_table;
+
   // A pointer to the bytecode data embedded within the module.
   iree_const_byte_span_t bytecode_data;
 
@@ -58,9 +62,10 @@ typedef struct {
   // Underlying FlatBuffer data and allocator (which may be null).
   iree_const_byte_span_t flatbuffer_data;
   iree_allocator_t flatbuffer_allocator;
+  iree_vm_BytecodeModuleDef_table_t def;
 
   // Type table mapping module type IDs to registered VM types.
-  int32_t type_count;
+  iree_host_size_t type_count;
   iree_vm_type_def_t* type_table;
 } iree_vm_bytecode_module_t;
 
@@ -74,18 +79,18 @@ typedef struct {
   iree_byte_span_t rwdata_storage;
 
   // Global ref_ptr values, indexed by global ordinal.
-  int32_t global_ref_count;
+  iree_host_size_t global_ref_count;
   iree_vm_ref_t* global_ref_table;
 
   // TODO(benvanik): move to iree_vm_bytecode_module_t if always static.
   // Initialized references to rodata segments.
   // Right now these don't do much, however we can perform lazy caching and
   // on-the-fly decompression using this information.
-  int32_t rodata_ref_count;
+  iree_host_size_t rodata_ref_count;
   iree_vm_ro_byte_buffer_t* rodata_ref_table;
 
   // Resolved function imports.
-  int32_t import_count;
+  iree_host_size_t import_count;
   iree_vm_function_t* import_table;
 
   // Allocator used for the state itself and any runtime allocations needed.

@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if(NOT ${IREE_TARGET_BACKEND_VMLA} OR NOT ${IREE_HAL_DRIVER_VMLA})
+  return()
+endif()
+
 iree_add_all_subdirs()
 
 iree_bytecode_module(
@@ -37,6 +41,7 @@ iree_cc_test(
     ::custom_modules_test_module_cc
     ::native_module
     absl::core_headers
+    absl::span
     absl::strings
     iree::base::api
     iree::base::logging
@@ -46,7 +51,7 @@ iree_cc_test(
     iree::testing::gtest_main
     iree::vm
     iree::vm::bytecode_module
-    iree::vm::ref
+    iree::vm::ref_cc
 )
 
 iree_cc_library(
@@ -58,10 +63,6 @@ iree_cc_library(
     "native_module.cc"
   DEPS
     iree::base::api
-    iree::base::api_util
-    iree::base::buffer_string_util
-    iree::base::shape
-    iree::base::shaped_buffer_string_util
     iree::hal::api
     iree::modules::hal
     iree::vm

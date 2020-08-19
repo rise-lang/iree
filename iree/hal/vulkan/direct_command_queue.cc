@@ -16,10 +16,7 @@
 
 #include <cstdint>
 
-#include "absl/time/clock.h"
-#include "absl/time/time.h"
 #include "iree/base/memory.h"
-#include "iree/base/source_location.h"
 #include "iree/base/status.h"
 #include "iree/base/tracing.h"
 #include "iree/hal/vulkan/direct_command_buffer.h"
@@ -121,8 +118,8 @@ Status DirectCommandQueue::Submit(absl::Span<const SubmissionBatch> batches) {
   auto timeline_submit_infos =
       arena.AllocateSpan<VkTimelineSemaphoreSubmitInfo>(batches.size());
   for (int i = 0; i < batches.size(); ++i) {
-    RETURN_IF_ERROR(TranslateBatchInfo(batches[i], &submit_infos[i],
-                                       &timeline_submit_infos[i], &arena));
+    IREE_RETURN_IF_ERROR(TranslateBatchInfo(batches[i], &submit_infos[i],
+                                            &timeline_submit_infos[i], &arena));
   }
 
   {
@@ -134,8 +131,8 @@ Status DirectCommandQueue::Submit(absl::Span<const SubmissionBatch> batches) {
   return OkStatus();
 }
 
-Status DirectCommandQueue::WaitIdle(absl::Time deadline) {
-  if (deadline == absl::InfiniteFuture()) {
+Status DirectCommandQueue::WaitIdle(Time deadline_ns) {
+  if (deadline_ns == InfiniteFuture()) {
     // Fast path for using vkQueueWaitIdle, which is usually cheaper (as it
     // requires fewer calls into the driver).
     IREE_TRACE_SCOPE0("DirectCommandQueue::WaitIdle#vkQueueWaitIdle");
@@ -160,21 +157,21 @@ Status DirectCommandQueue::WaitIdle(absl::Time deadline) {
                            logical_device_->allocator());
   });
 
-  uint64_t timeout;
-  if (deadline == absl::InfinitePast()) {
+  uint64_t timeout_ns;
+  if (deadline_ns == InfinitePast()) {
     // Do not wait.
-    timeout = 0;
-  } else if (deadline == absl::InfiniteFuture()) {
+    timeout_ns = 0;
+  } else if (deadline_ns == InfiniteFuture()) {
     // Wait forever.
-    timeout = UINT64_MAX;
+    timeout_ns = UINT64_MAX;
   } else {
     // Convert to relative time in nanoseconds.
     // The implementation may not wait with this granularity (like, by 10000x).
-    absl::Time now = absl::Now();
-    if (deadline < now) {
+    Time now_ns = Now();
+    if (deadline_ns < now_ns) {
       return DeadlineExceededErrorBuilder(IREE_LOC) << "Deadline in the past";
     }
-    timeout = static_cast<uint64_t>(absl::ToInt64Nanoseconds(deadline - now));
+    timeout_ns = static_cast<uint64_t>(deadline_ns - now_ns);
   }
 
   {
@@ -183,7 +180,7 @@ Status DirectCommandQueue::WaitIdle(absl::Time deadline) {
   }
 
   VkResult result =
-      syms()->vkWaitForFences(*logical_device_, 1, &fence, VK_TRUE, timeout);
+      syms()->vkWaitForFences(*logical_device_, 1, &fence, VK_TRUE, timeout_ns);
   switch (result) {
     case VK_SUCCESS:
       return OkStatus();
@@ -191,7 +188,7 @@ Status DirectCommandQueue::WaitIdle(absl::Time deadline) {
       return DeadlineExceededErrorBuilder(IREE_LOC)
              << "Deadline exceeded waiting for idle";
     default:
-      return VkResultToStatus(result);
+      return VkResultToStatus(result, IREE_LOC);
   }
 }
 

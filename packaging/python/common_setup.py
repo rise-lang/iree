@@ -16,6 +16,7 @@ import os
 import platform
 import setuptools
 import sys
+import sysconfig
 from datetime import date
 
 
@@ -27,6 +28,11 @@ def get_exe_suffix():
 
 
 def get_package_dir(prefix=("bindings", "python")):
+  explicit_root = os.environ.get("PYIREE_PYTHON_ROOT")
+  if explicit_root:
+    return explicit_root
+
+  # Use env variables based on build system type.
   cmake_build_root = os.environ.get("PYIREE_CMAKE_BUILD_ROOT")
   bazel_build_root = os.environ.get("PYIREE_BAZEL_BUILD_ROOT")
 
@@ -99,15 +105,6 @@ def get_setup_defaults(sub_project, description, package_dir=None):
   }
 
 
-def get_native_file_extension():
-  if platform.system() == "Windows":
-    return "pyd"
-  elif platform.system() == "Darwin":
-    return "dylib"
-  else:
-    return "so"
-
-
 def setup(**kwargs):
   # See: https://stackoverflow.com/q/45150304
   try:
@@ -128,7 +125,7 @@ def setup(**kwargs):
   # Unfortunately, bazel is imprecise and scatters .so files around, so
   # need to be specific.
   package_data = {
-      "": ["*.%s" % (get_native_file_extension(),)],
+      "": ["*%s" % (sysconfig.get_config_var("EXT_SUFFIX"),)],
   }
   setuptools.setup(
       package_data=package_data,

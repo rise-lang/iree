@@ -31,6 +31,7 @@ cc_test(
         ":invocation",
         ":module",
         "//iree/base:logging",
+        "//iree/base:status",
         "//iree/testing:gtest_main",
         "//iree/vm/test:all_bytecode_modules_cc",
         "@com_google_absl//absl/strings",
@@ -41,7 +42,8 @@ cc_library(
     name = "bytecode_module",
     srcs = [
         "bytecode_dispatch.c",
-        "bytecode_module.cc",
+        "bytecode_dispatch_util.h",
+        "bytecode_module.c",
         "bytecode_module_impl.h",
         "bytecode_op_table.h",
     ],
@@ -59,11 +61,9 @@ cc_library(
         ":value",
         "//iree/base:alignment",
         "//iree/base:api",
-        "//iree/base:flatbuffer_util",
-        "//iree/base:target_platform",
-        "//iree/schemas:bytecode_module_def_cc_fbs",
-        "@com_github_google_flatbuffers//:flatbuffers",
-        "@com_google_absl//absl/strings",
+        "//iree/base:tracing",
+        "//iree/schemas:bytecode_module_def_c_fbs",
+        "@com_github_dvidelabs_flatcc//:runtime",
     ],
 )
 
@@ -87,6 +87,24 @@ cc_test(
 iree_bytecode_module(
     name = "bytecode_module_benchmark_module",
     src = "bytecode_module_benchmark.mlir",
+    cc_namespace = "iree::vm",
+    flags = ["-iree-vm-ir-to-bytecode-module"],
+)
+
+cc_test(
+    name = "bytecode_module_size_benchmark",
+    srcs = ["bytecode_module_size_benchmark.cc"],
+    deps = [
+        ":bytecode_module",
+        ":bytecode_module_size_benchmark_module_cc",
+        ":vm",
+        "//iree/base:api",
+    ],
+)
+
+iree_bytecode_module(
+    name = "bytecode_module_size_benchmark_module",
+    src = "bytecode_module_size_benchmark.mlir",
     cc_namespace = "iree::vm",
     flags = ["-iree-vm-ir-to-bytecode-module"],
 )
@@ -149,8 +167,8 @@ cc_library(
     hdrs = ["invocation.h"],
     deps = [
         ":context",
+        ":list",
         ":module",
-        ":variant_list",
         "//iree/base:api",
         "//iree/base:tracing",
     ],
@@ -205,7 +223,6 @@ cc_library(
         ":ref_cc",
         ":stack",
         "//iree/base:api",
-        "//iree/base:api_util",
         "//iree/base:ref_ptr",
         "//iree/base:status",
         "@com_google_absl//absl/strings",
@@ -230,6 +247,7 @@ cc_test(
         ":ref",
         "//iree/base:api",
         "//iree/base:ref_ptr",
+        "//iree/testing:gtest",
         "//iree/testing:gtest_main",
     ],
 )
@@ -251,7 +269,6 @@ cc_library(
     deps = [
         ":module",
         ":ref",
-        ":variant_list",
         "//iree/base:alignment",
         "//iree/base:api",
         "//iree/base:tracing",
@@ -266,6 +283,7 @@ cc_test(
         ":stack",
         "//iree/base:api",
         "//iree/base:ref_ptr",
+        "//iree/testing:gtest",
         "//iree/testing:gtest_main",
     ],
 )
@@ -285,16 +303,6 @@ cc_library(
 )
 
 cc_library(
-    name = "variant_list",
-    srcs = ["variant_list.c"],
-    hdrs = ["variant_list.h"],
-    deps = [
-        ":ref",
-        ":value",
-    ],
-)
-
-cc_library(
     name = "vm",
     hdrs = [
         "api.h",
@@ -310,7 +318,6 @@ cc_library(
         ":stack",
         ":type_def",
         ":value",
-        ":variant_list",
         "//iree/base:api",
     ],
 )

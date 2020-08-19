@@ -30,9 +30,14 @@ namespace Flow {
 namespace {
 
 static llvm::cl::opt<bool> extractPadFromConv(
-    "iree-extract-pad-from-conv",
+    "iree-flow-extract-pad-from-conv",
     llvm::cl::desc("Extract padding attributes from conv op"),
     llvm::cl::init(true));
+
+static llvm::cl::opt<bool> conv1x1toDot(
+    "iree-flow-1x1-conv-to-dot",
+    llvm::cl::desc("Rewrites mhlo.conv with 1x1 filter into mhlo.dot"),
+    llvm::cl::init(false));
 
 static bool isAllZero(DenseIntElementsAttr attr) {
   if (!attr.isSplat()) return false;
@@ -48,6 +53,23 @@ static bool hasPadding(OpTy op) {
   return llvm::any_of(padding.getValue(),
                       [](APInt v) -> bool { return !v.isNullValue(); });
 }
+
+class DecomposeLog1PPattern : public OpRewritePattern<mhlo::Log1pOp> {
+ public:
+  using OpRewritePattern<mhlo::Log1pOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mhlo::Log1pOp op,
+                                PatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    auto type = op.operand().getType().cast<TensorType>();
+    DenseElementsAttr attr =
+        DenseElementsAttr::get(type, rewriter.getF32FloatAttr(1.0));
+    auto one = rewriter.create<ConstantOp>(loc, attr);
+    auto x = rewriter.create<mhlo::AddOp>(loc, op.operand(), one);
+    rewriter.replaceOpWithNewOp<mhlo::LogOp>(op, x);
+    return success();
+  }
+};
 
 class ExtractConvOpPaddingAttributes : public OpRewritePattern<mhlo::ConvOp> {
  public:
@@ -151,6 +173,92 @@ class ExtractReduceWindowOpPaddingAttributes
   }
 };
 
+// Rewrites an n-d (n, d1, d2, d3, ..., ci) * (1, 1, 1, ..., ci, co)
+// as (n * d1 * d2 * d3, ..., ci) . (ci, co)
+class Lower1x1ConvolutionToDotOp : public OpRewritePattern<mhlo::ConvOp> {
+ public:
+  using OpRewritePattern<mhlo::ConvOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mhlo::ConvOp op,
+                                PatternRewriter &rewriter) const override {
+    // Only 1x1 convolution no groups will match.
+    if (op.feature_group_count() != 1) return failure();
+
+    Value input = op.lhs();
+    Value filter = op.rhs();
+    Value output = op.getResult();
+    auto inputShapeType = input.getType().dyn_cast_or_null<RankedTensorType>();
+    auto filterShapeType =
+        filter.getType().dyn_cast_or_null<RankedTensorType>();
+    auto outputShapeType =
+        output.getType().dyn_cast_or_null<RankedTensorType>();
+
+    if (!inputShapeType || !filterShapeType || !outputShapeType) {
+      return failure();
+    }
+
+    auto inputShape = inputShapeType.getShape();
+    auto filterShape = filterShapeType.getShape();
+
+    auto inputBatchDim =
+        op.dimension_numbers().input_batch_dimension().getInt();
+    auto inputFeatureDim =
+        op.dimension_numbers().input_feature_dimension().getInt();
+    auto kernelInputFeatureDim =
+        op.dimension_numbers().kernel_input_feature_dimension().getInt();
+    auto kernelOutputFeatureDim =
+        op.dimension_numbers().kernel_output_feature_dimension().getInt();
+
+    // Match input (n, d1, d2, ..., ci) format
+    if (inputFeatureDim != (inputShape.size() - 1) || inputBatchDim != 0) {
+      return failure();
+    }
+
+    // Match filter (k1, k2, ..., ci, co) format
+    if (kernelInputFeatureDim != (filterShape.size() - 2) ||
+        kernelOutputFeatureDim != (filterShape.size() - 1)) {
+      return failure();
+    }
+
+    // Check 1x1x... kernel spatial size.
+    for (auto dim : op.dimension_numbers().kernel_spatial_dimensions()) {
+      if (filterShape[dim.getZExtValue()] != 1) return failure();
+    }
+
+    int64_t spatialSize = inputShape[0];
+    for (auto dim : op.dimension_numbers().input_spatial_dimensions()) {
+      spatialSize *= inputShape[dim.getZExtValue()];
+    }
+
+    Type reshapedInputType =
+        RankedTensorType::get({spatialSize, inputShape[inputFeatureDim]},
+                              inputShapeType.getElementType());
+    Type reshapedFilterTYpe =
+        RankedTensorType::get({filterShape[kernelInputFeatureDim],
+                               filterShape[kernelOutputFeatureDim]},
+                              filterShapeType.getElementType());
+    Type dotResultType = RankedTensorType::get(
+        {spatialSize, filterShape[kernelOutputFeatureDim]},
+        outputShapeType.getElementType());
+
+    Value reshapedInput =
+        rewriter.create<mhlo::ReshapeOp>(op.getLoc(), reshapedInputType, input);
+    Value reshapedFilter = rewriter.create<mhlo::ReshapeOp>(
+        op.getLoc(), reshapedFilterTYpe, filter);
+
+    Value dotResult = rewriter.create<mhlo::DotOp>(
+        op.getLoc(), dotResultType, reshapedInput, reshapedFilter,
+        rewriter.getStrArrayAttr({"HIGHEST", "HIGHEST"}));
+
+    Value reshapedResult = rewriter.create<mhlo::ReshapeOp>(
+        op.getLoc(), outputShapeType, dotResult);
+
+    rewriter.replaceOp(op, reshapedResult);
+
+    return success();
+  }
+};
+
 // Adjust the shape of depthwise_conv filter where is applied by mhlo.
 class AdjustDepthwiseFilterShape : public OpRewritePattern<mhlo::ConvOp> {
  public:
@@ -191,14 +299,19 @@ struct HLOToHLOPreprocessing
     MLIRContext *context = &getContext();
     OwningRewritePatternList patterns;
     mhlo::PopulateUnfuseBatchNormPatterns(context, &patterns);
+    mhlo::PopulateComplexLoweringPatterns(context, &patterns);
+    mhlo::PopulateGatherToTorchIndexSelectPatterns(context, &patterns);
     // Note that various input modalities may do their own legalization of
     // CHLO. Converting here allows IREE to accept CHLO dialect regardless of
     // whether it was legalized away at a higher level.
     chlo::PopulateLegalizeChloToHloPatterns(context, &patterns);
     patterns.insert<ExtractReduceWindowOpPaddingAttributes,
-                    AdjustDepthwiseFilterShape>(context);
+                    AdjustDepthwiseFilterShape, DecomposeLog1PPattern>(context);
     if (extractPadFromConv) {
       patterns.insert<ExtractConvOpPaddingAttributes>(context);
+    }
+    if (conv1x1toDot) {
+      patterns.insert<Lower1x1ConvolutionToDotOp>(context);
     }
     applyPatternsAndFoldGreedily(getOperation(), patterns);
   }

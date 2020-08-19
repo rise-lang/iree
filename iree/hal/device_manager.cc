@@ -16,7 +16,6 @@
 
 #include <algorithm>
 
-#include "iree/base/source_location.h"
 #include "iree/base/status.h"
 #include "iree/base/tracing.h"
 #include "iree/hal/heap_buffer.h"
@@ -151,7 +150,7 @@ StatusOr<ref_ptr<Buffer>> DeviceManager::AllocateDeviceVisibleBuffer(
   memory_type |= MemoryType::kDeviceVisible;
 
   // Find an allocator that works for device-visible buffers.
-  ASSIGN_OR_RETURN(
+  IREE_ASSIGN_OR_RETURN(
       auto* allocator,
       FindCompatibleAllocator(memory_type, buffer_usage, device_placements));
   return allocator->Allocate(memory_type, buffer_usage, allocation_size);
@@ -170,7 +169,7 @@ StatusOr<ref_ptr<Buffer>> DeviceManager::AllocateDeviceLocalBuffer(
   }
 
   // Find an allocator that works for device-local buffers.
-  ASSIGN_OR_RETURN(
+  IREE_ASSIGN_OR_RETURN(
       auto* allocator,
       FindCompatibleAllocator(memory_type, buffer_usage, device_placements));
   return allocator->Allocate(memory_type, buffer_usage, allocation_size);
@@ -178,7 +177,7 @@ StatusOr<ref_ptr<Buffer>> DeviceManager::AllocateDeviceLocalBuffer(
 
 Status DeviceManager::Submit(Device* device, CommandQueue* command_queue,
                              absl::Span<const SubmissionBatch> batches,
-                             absl::Time deadline) {
+                             Time deadline_ns) {
   IREE_TRACE_SCOPE0("DeviceManager::Submit");
   return command_queue->Submit(batches);
 }
@@ -188,11 +187,11 @@ Status DeviceManager::Flush() {
   return OkStatus();
 }
 
-Status DeviceManager::WaitIdle(absl::Time deadline) {
+Status DeviceManager::WaitIdle(Time deadline_ns) {
   IREE_TRACE_SCOPE0("DeviceManager::WaitIdle");
   absl::MutexLock lock(&device_mutex_);
   for (const auto& device : devices_) {
-    RETURN_IF_ERROR(device->WaitIdle(deadline));
+    IREE_RETURN_IF_ERROR(device->WaitIdle(deadline_ns));
   }
   return OkStatus();
 }

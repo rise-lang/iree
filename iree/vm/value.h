@@ -38,6 +38,9 @@ typedef enum {
   IREE_VM_VALUE_TYPE_COUNT = IREE_VM_VALUE_TYPE_MAX + 1,
 } iree_vm_value_type_t;
 
+// Maximum size, in bytes, of any value type we can represent.
+#define IREE_VM_VALUE_STORAGE_SIZE 8
+
 // A variant value type.
 typedef struct iree_vm_value {
   iree_vm_value_type_t type;
@@ -46,22 +49,25 @@ typedef struct iree_vm_value {
     int16_t i16;
     int32_t i32;
     int64_t i64;
+
+    uint8_t value_storage[IREE_VM_VALUE_STORAGE_SIZE];  // max size of all value
+                                                        // types
   };
 } iree_vm_value_t;
 
-#ifdef __cplusplus
-inline iree_vm_value_t iree_vm_value_make_i32(int32_t value) {
+static inline iree_vm_value_t iree_vm_value_make_i32(int32_t value) {
   iree_vm_value_t result;
   result.type = IREE_VM_VALUE_TYPE_I32;
   result.i32 = value;
   return result;
 }
-#else
-#define iree_vm_value_make_i32(value)                   \
-  {                                                     \
-    IREE_VM_VALUE_TYPE_I32, { .i32 = (int32_t)(value) } \
-  }
-#endif  // __cplusplus
+
+static inline iree_vm_value_t iree_vm_value_make_i64(int64_t value) {
+  iree_vm_value_t result;
+  result.type = IREE_VM_VALUE_TYPE_I64;
+  result.i64 = value;
+  return result;
+}
 
 #ifdef __cplusplus
 }  // extern "C"

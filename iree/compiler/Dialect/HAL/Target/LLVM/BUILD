@@ -11,13 +11,23 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-#
-load("//iree:build_defs.oss.bzl", "platform_trampoline_deps")
+
+load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content", "platform_trampoline_deps")
 
 package(
     default_visibility = ["//visibility:public"],
     features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
+)
+
+# TODO(scotttodd): add 'common', 'JIT', 'AOT' subfolders to filter on
+#     IREE_TARGET_BACKEND_[DYLIB-LLVM-AOT|LLVM-IR]
+iree_cmake_extra_content(
+    content = """
+if(NOT ${IREE_TARGET_BACKEND_LLVM-IR})
+  return()
+endif()
+""",
 )
 
 cc_library(
@@ -105,9 +115,7 @@ cc_library(
 cc_library(
     name = "LLVMAOTTargetLinker",
     hdrs = ["LLVMAOTTargetLinker.h"],
-    deps = [
-        "//iree/base:file_io",
-    ] + platform_trampoline_deps("LLVMAOTTargetLinker", "compiler/Dialect/HAL/Target/LLVM"),
+    deps = platform_trampoline_deps("LLVMAOTTargetLinker", "compiler/Dialect/HAL/Target/LLVM"),
 )
 
 cc_library(
@@ -115,6 +123,6 @@ cc_library(
     hdrs = ["LLVMAOTTargetLinker.h"],
     deps = [
         ":LLVMTargetOptions",
-        "//iree/base:file_io",
+        "//iree/base:status",
     ],
 )

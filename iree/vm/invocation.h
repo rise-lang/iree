@@ -19,8 +19,8 @@
 
 #include "iree/base/api.h"
 #include "iree/vm/context.h"
+#include "iree/vm/list.h"
 #include "iree/vm/module.h"
-#include "iree/vm/variant_list.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,8 +28,6 @@ extern "C" {
 
 typedef struct iree_vm_invocation iree_vm_invocation_t;
 typedef struct iree_vm_invocation_policy iree_vm_invocation_policy_t;
-
-#ifndef IREE_API_NO_PROTOTYPES
 
 // Synchronously invokes a function in the VM.
 //
@@ -46,15 +44,14 @@ typedef struct iree_vm_invocation_policy iree_vm_invocation_policy_t;
 // caller.
 IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_invoke(
     iree_vm_context_t* context, iree_vm_function_t function,
-    const iree_vm_invocation_policy_t* policy, iree_vm_variant_list_t* inputs,
-    iree_vm_variant_list_t* outputs, iree_allocator_t allocator);
+    const iree_vm_invocation_policy_t* policy, iree_vm_list_t* inputs,
+    iree_vm_list_t* outputs, iree_allocator_t allocator);
 
 // TODO(benvanik): document and implement.
 IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_invocation_create(
     iree_vm_context_t* context, iree_vm_function_t function,
-    const iree_vm_invocation_policy_t* policy,
-    const iree_vm_variant_list_t* inputs, iree_allocator_t allocator,
-    iree_vm_invocation_t** out_invocation);
+    const iree_vm_invocation_policy_t* policy, const iree_vm_list_t* inputs,
+    iree_allocator_t allocator, iree_vm_invocation_t** out_invocation);
 
 // Retains the given |invocation| for the caller.
 IREE_API_EXPORT iree_status_t IREE_API_CALL
@@ -80,7 +77,7 @@ iree_vm_invocation_query_status(iree_vm_invocation_t* invocation);
 // released.
 //
 // Returns NULL if the invocation did not complete successfully.
-IREE_API_EXPORT const iree_vm_variant_list_t* IREE_API_CALL
+IREE_API_EXPORT const iree_vm_list_t* IREE_API_CALL
 iree_vm_invocation_output(iree_vm_invocation_t* invocation);
 
 // Blocks the caller until the invocation completes (successfully or otherwise).
@@ -94,8 +91,6 @@ IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_invocation_await(
 // A no-op if the invocation has already completed.
 IREE_API_EXPORT iree_status_t IREE_API_CALL
 iree_vm_invocation_abort(iree_vm_invocation_t* invocation);
-
-#endif  // IREE_API_NO_PROTOTYPES
 
 #ifdef __cplusplus
 }  // extern "C"

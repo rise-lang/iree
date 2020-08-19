@@ -14,18 +14,24 @@
 
 #include "bindings/java/com/google/iree/native/module_wrapper.h"
 
-#include "iree/base/api_util.h"
-
 namespace iree {
 namespace java {
 
 Status ModuleWrapper::Create(const uint8_t* flatbuffer_data,
                              iree_host_size_t length) {
-  return FromApiStatus(
-      iree_vm_bytecode_module_create(
-          iree_const_byte_span_t{flatbuffer_data, length}, IREE_ALLOCATOR_NULL,
-          IREE_ALLOCATOR_SYSTEM, &module_),
-      IREE_LOC);
+  return iree_vm_bytecode_module_create(
+      iree_const_byte_span_t{flatbuffer_data, length}, iree_allocator_null(),
+      iree_allocator_system(), &module_);
+}
+
+iree_vm_module_t* ModuleWrapper::module() const { return module_; }
+
+iree_string_view_t ModuleWrapper::name() const {
+  return iree_vm_module_name(module_);
+}
+
+iree_vm_module_signature_t ModuleWrapper::signature() const {
+  return iree_vm_module_signature(module_);
 }
 
 ModuleWrapper::~ModuleWrapper() { iree_vm_module_release(module_); }

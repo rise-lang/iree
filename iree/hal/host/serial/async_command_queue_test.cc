@@ -14,21 +14,21 @@
 
 #include "iree/hal/host/serial/async_command_queue.h"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
+#include <thread>
 #include <utility>
 
 #include "absl/memory/memory.h"
-#include "absl/time/clock.h"
-#include "absl/time/time.h"
 #include "iree/base/status.h"
-#include "iree/base/status_matchers.h"
 #include "iree/base/time.h"
 #include "iree/hal/command_queue.h"
 #include "iree/hal/host/serial/serial_submission_queue.h"
 #include "iree/hal/testing/mock_command_buffer.h"
 #include "iree/hal/testing/mock_command_queue.h"
 #include "iree/testing/gtest.h"
+#include "iree/testing/status_matchers.h"
 
 namespace iree {
 namespace hal {
@@ -39,6 +39,13 @@ using ::testing::_;
 
 using testing::MockCommandBuffer;
 using testing::MockCommandQueue;
+
+// Suspends execution of the calling thread for the given |duration_ms|.
+// Depending on platform this may have an extremely coarse resolution (upwards
+// of several to dozens of milliseconds).
+inline void Sleep(std::chrono::milliseconds duration_ms) {
+  std::this_thread::sleep_for(duration_ms);
+}
 
 struct AsyncCommandQueueTest : public ::testing::Test {
   MockCommandQueue* mock_target_queue;
@@ -73,9 +80,9 @@ TEST_F(AsyncCommandQueueTest, BlockingSubmit) {
         return OkStatus();
       });
   CondVarSemaphore semaphore(0ull);
-  ASSERT_OK(
+  IREE_ASSERT_OK(
       command_queue->Submit({{}, {cmd_buffer.get()}, {{&semaphore, 1ull}}}));
-  ASSERT_OK(semaphore.Wait(1ull, absl::InfiniteFuture()));
+  IREE_ASSERT_OK(semaphore.Wait(1ull, InfiniteFuture()));
 }
 
 // Tests that failure is propagated along the fence from the target queue.
@@ -90,14 +97,14 @@ TEST_F(AsyncCommandQueueTest, PropagateSubmitFailure) {
         return DataLossErrorBuilder(IREE_LOC);
       });
   CondVarSemaphore semaphore(0ull);
-  ASSERT_OK(
+  IREE_ASSERT_OK(
       command_queue->Submit({{}, {cmd_buffer.get()}, {{&semaphore, 1ull}}}));
-  EXPECT_TRUE(IsDataLoss(semaphore.Wait(1ull, absl::InfiniteFuture())));
+  EXPECT_TRUE(IsDataLoss(semaphore.Wait(1ull, InfiniteFuture())));
 }
 
 // Tests that waiting for idle is a no-op when nothing is queued.
 TEST_F(AsyncCommandQueueTest, WaitIdleWhileIdle) {
-  ASSERT_OK(command_queue->WaitIdle());
+  IREE_ASSERT_OK(command_queue->WaitIdle());
 }
 
 // Tests that waiting for idle will block when work is pending/in-flight.
@@ -109,18 +116,18 @@ TEST_F(AsyncCommandQueueTest, WaitIdleWithPending) {
 
   EXPECT_CALL(*mock_target_queue, Submit(_))
       .WillOnce([](absl::Span<const SubmissionBatch> batches) {
-        Sleep(absl::Milliseconds(100));
+        Sleep(std::chrono::milliseconds(100));
         return OkStatus();
       });
   CondVarSemaphore semaphore(0ull);
-  ASSERT_OK(
+  IREE_ASSERT_OK(
       command_queue->Submit({{}, {cmd_buffer.get()}, {{&semaphore, 1ull}}}));
 
   // This should block for a sec or two.
-  ASSERT_OK(command_queue->WaitIdle());
+  IREE_ASSERT_OK(command_queue->WaitIdle());
 
   // Should have already expired.
-  ASSERT_OK_AND_ASSIGN(uint64_t value, semaphore.Query());
+  IREE_ASSERT_OK_AND_ASSIGN(uint64_t value, semaphore.Query());
   ASSERT_EQ(1ull, value);
 }
 
@@ -131,7 +138,7 @@ TEST_F(AsyncCommandQueueTest, WaitIdleAndProgress) {
 
   EXPECT_CALL(*mock_target_queue, Submit(_))
       .WillRepeatedly([](absl::Span<const SubmissionBatch> batches) {
-        Sleep(absl::Milliseconds(100));
+        Sleep(std::chrono::milliseconds(100));
         return OkStatus();
       });
 
@@ -141,19 +148,19 @@ TEST_F(AsyncCommandQueueTest, WaitIdleAndProgress) {
                                                   CommandCategory::kTransfer);
 
   CondVarSemaphore semaphore_0(0u);
-  ASSERT_OK(command_queue->Submit(
+  IREE_ASSERT_OK(command_queue->Submit(
       {{}, {cmd_buffer_0.get()}, {{&semaphore_0, 1ull}}}));
   CondVarSemaphore semaphore_1(0u);
-  ASSERT_OK(
+  IREE_ASSERT_OK(
       command_queue->Submit({{}, {cmd_buffer_1.get()}, {{&semaphore_1, 1u}}}));
 
   // This should block for a sec or two.
-  ASSERT_OK(command_queue->WaitIdle());
+  IREE_ASSERT_OK(command_queue->WaitIdle());
 
   // Both should have already expired.
-  ASSERT_OK_AND_ASSIGN(uint64_t value_0, semaphore_0.Query());
+  IREE_ASSERT_OK_AND_ASSIGN(uint64_t value_0, semaphore_0.Query());
   ASSERT_EQ(1ull, value_0);
-  ASSERT_OK_AND_ASSIGN(uint64_t value_1, semaphore_1.Query());
+  IREE_ASSERT_OK_AND_ASSIGN(uint64_t value_1, semaphore_1.Query());
   ASSERT_EQ(1ull, value_1);
 }
 
@@ -164,15 +171,15 @@ TEST_F(AsyncCommandQueueTest, StickyFailures) {
   // Fail.
   EXPECT_CALL(*mock_target_queue, Submit(_))
       .WillOnce([](absl::Span<const SubmissionBatch> batches) {
-        Sleep(absl::Milliseconds(100));
+        Sleep(std::chrono::milliseconds(100));
         return DataLossErrorBuilder(IREE_LOC);
       });
   auto cmd_buffer_0 = make_ref<MockCommandBuffer>(CommandBufferMode::kOneShot,
                                                   CommandCategory::kTransfer);
   CondVarSemaphore semaphore_0(0ull);
-  ASSERT_OK(
+  IREE_ASSERT_OK(
       command_queue->Submit({{}, {cmd_buffer_0.get()}, {{&semaphore_0, 1u}}}));
-  EXPECT_TRUE(IsDataLoss(semaphore_0.Wait(1ull, absl::InfiniteFuture())));
+  EXPECT_TRUE(IsDataLoss(semaphore_0.Wait(1ull, InfiniteFuture())));
 
   // Future flushes/waits/etc should also fail.
   EXPECT_TRUE(IsDataLoss(command_queue->WaitIdle()));
@@ -193,7 +200,7 @@ TEST_F(AsyncCommandQueueTest, FailuresCascadeAcrossSubmits) {
   // Fail.
   EXPECT_CALL(*mock_target_queue, Submit(_))
       .WillOnce([](absl::Span<const SubmissionBatch> batches) {
-        Sleep(absl::Milliseconds(100));
+        Sleep(std::chrono::milliseconds(100));
         return DataLossErrorBuilder(IREE_LOC);
       });
 
@@ -203,16 +210,16 @@ TEST_F(AsyncCommandQueueTest, FailuresCascadeAcrossSubmits) {
                                                   CommandCategory::kTransfer);
 
   CondVarSemaphore semaphore_0(0ull);
-  ASSERT_OK(command_queue->Submit(
+  IREE_ASSERT_OK(command_queue->Submit(
       {{}, {cmd_buffer_0.get()}, {{&semaphore_0, 1ull}}}));
   CondVarSemaphore semaphore_1(0ull);
-  ASSERT_OK(command_queue->Submit(
+  IREE_ASSERT_OK(command_queue->Submit(
       {{{&semaphore_0, 1ull}}, {cmd_buffer_1.get()}, {{&semaphore_1, 1ull}}}));
 
   EXPECT_TRUE(IsDataLoss(command_queue->WaitIdle()));
 
-  EXPECT_TRUE(IsDataLoss(semaphore_0.Wait(1ull, absl::InfiniteFuture())));
-  EXPECT_TRUE(IsDataLoss(semaphore_1.Wait(1ull, absl::InfiniteFuture())));
+  EXPECT_TRUE(IsDataLoss(semaphore_0.Wait(1ull, InfiniteFuture())));
+  EXPECT_TRUE(IsDataLoss(semaphore_1.Wait(1ull, InfiniteFuture())));
 
   // Future flushes/waits/etc should also fail.
   EXPECT_TRUE(IsDataLoss(command_queue->WaitIdle()));

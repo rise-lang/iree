@@ -46,9 +46,7 @@ iree_cc_test(
     iree::testing::gtest_main
     iree::vm
     iree::vm::bytecode_module
-    iree::vm::ref
     iree::vm::ref_cc
-    iree::vm::variant_list
 )
 
 iree_cc_library(
@@ -62,7 +60,6 @@ iree_cc_library(
     absl::inlined_vector
     absl::span
     iree::base::api
-    iree::base::api_util
     iree::base::ref_ptr
     iree::base::status
     iree::hal::api

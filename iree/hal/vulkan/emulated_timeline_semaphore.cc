@@ -16,8 +16,8 @@
 
 #include "absl/container/inlined_vector.h"
 #include "absl/synchronization/mutex.h"
-#include "absl/time/time.h"
 #include "absl/utility/utility.h"
+#include "iree/base/time.h"
 #include "iree/base/tracing.h"
 #include "iree/hal/vulkan/dynamic_symbols.h"
 #include "iree/hal/vulkan/status_util.h"
@@ -51,7 +51,7 @@ EmulatedTimelineSemaphore::EmulatedTimelineSemaphore(
 
 EmulatedTimelineSemaphore::~EmulatedTimelineSemaphore() {
   IREE_TRACE_SCOPE0("EmulatedTimelineSemaphore::dtor");
-  CHECK_OK(TryToAdvanceTimeline(UINT64_MAX).status());
+  IREE_CHECK_OK(TryToAdvanceTimeline(UINT64_MAX).status());
   absl::MutexLock lock(&mutex_);
   CHECK(outstanding_semaphores_.empty())
       << "Destroying an emulated timeline semaphore without first waiting on "
@@ -59,7 +59,8 @@ EmulatedTimelineSemaphore::~EmulatedTimelineSemaphore() {
 }
 
 StatusOr<uint64_t> EmulatedTimelineSemaphore::Query() {
-  RETURN_IF_ERROR(TryToAdvanceTimeline(UINT64_MAX).status());
+  IREE_ASSIGN_OR_RETURN(bool signaled, TryToAdvanceTimeline(UINT64_MAX));
+  (void)signaled;
   uint64_t value = signaled_value_.load();
   if (value == UINT64_MAX) {
     absl::MutexLock lock(&mutex_);
@@ -77,12 +78,12 @@ Status EmulatedTimelineSemaphore::Signal(uint64_t value) {
       << " but " << signaled_value << " already signaled";
 
   // Inform the device to make progress given we have a new value signaled now.
-  RETURN_IF_ERROR(on_signal_(this));
+  IREE_RETURN_IF_ERROR(on_signal_(this));
 
   return OkStatus();
 }
 
-Status EmulatedTimelineSemaphore::Wait(uint64_t value, absl::Time deadline) {
+Status EmulatedTimelineSemaphore::Wait(uint64_t value, Time deadline_ns) {
   IREE_TRACE_SCOPE0("EmulatedTimelineSemaphore::Wait");
 
   VkFence fence = VK_NULL_HANDLE;
@@ -90,7 +91,8 @@ Status EmulatedTimelineSemaphore::Wait(uint64_t value, absl::Time deadline) {
     IREE_TRACE_SCOPE0("EmulatedTimelineSemaphore::Wait#loop");
     // First try to advance the timeline without blocking to see whether we've
     // already reached the desired value.
-    ASSIGN_OR_RETURN(bool reached_desired_value, TryToAdvanceTimeline(value));
+    IREE_ASSIGN_OR_RETURN(bool reached_desired_value,
+                          TryToAdvanceTimeline(value));
     if (reached_desired_value) return OkStatus();
 
     // We must wait now. Find the first emulated time point that has a value >=
@@ -112,29 +114,20 @@ Status EmulatedTimelineSemaphore::Wait(uint64_t value, absl::Time deadline) {
       break;
     }
     // TODO(antiagainst): figure out a better way instead of the busy loop here.
-  } while (absl::Now() < deadline);
+  } while (Now() < deadline_ns);
 
   if (fence == VK_NULL_HANDLE) {
     return DeadlineExceededErrorBuilder(IREE_LOC)
            << "Deadline reached when waiting timeline semaphore";
   }
 
-  uint64_t timeout_nanos;
-  if (deadline == absl::InfiniteFuture()) {
-    timeout_nanos = UINT64_MAX;
-  } else if (deadline == absl::InfinitePast()) {
-    timeout_nanos = 0;
-  } else {
-    auto relative_nanos = absl::ToInt64Nanoseconds(deadline - absl::Now());
-    timeout_nanos = relative_nanos < 0 ? 0 : relative_nanos;
-  }
-
+  uint64_t timeout_ns =
+      static_cast<uint64_t>(DeadlineToRelativeTimeoutNanos(deadline_ns));
   VK_RETURN_IF_ERROR(logical_device_->syms()->vkWaitForFences(
       *logical_device_, /*fenceCount=*/1, &fence, /*waitAll=*/true,
-      timeout_nanos));
+      timeout_ns));
 
-  RETURN_IF_ERROR(TryToAdvanceTimeline(value).status());
-  return OkStatus();
+  return TryToAdvanceTimeline(value).status();
 }
 
 void EmulatedTimelineSemaphore::Fail(Status status) {
@@ -194,7 +187,8 @@ StatusOr<VkSemaphore> EmulatedTimelineSemaphore::GetSignalSemaphore(
     if ((*insertion_point)->value > value) break;
   }
 
-  ASSIGN_OR_RETURN(TimePointSemaphore * semaphore, semaphore_pool_->Acquire());
+  IREE_ASSIGN_OR_RETURN(TimePointSemaphore * semaphore,
+                        semaphore_pool_->Acquire());
   semaphore->value = value;
   semaphore->signal_fence = add_ref(signal_fence);
   if (semaphore->wait_fence) {
@@ -301,7 +295,7 @@ StatusOr<bool> EmulatedTimelineSemaphore::TryToAdvanceTimeline(
         // fences.
         keep_resolving = false;
         semaphore->signal_fence = nullptr;
-        status_ = VkResultToStatus(signal_status);
+        status_ = VkResultToStatus(signal_status, IREE_LOC);
         signaled_value_.store(UINT64_MAX);
         break;
     }

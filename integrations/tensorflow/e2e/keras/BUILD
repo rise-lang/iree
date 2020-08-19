@@ -122,7 +122,7 @@ VULKAN_PASSING = glob(
 iree_e2e_test_suite(
     name = "keras_tests",
     backends_to_srcs = {
-        "tf_also": TF_PASSING,
+        "tf": TF_PASSING,
         "iree_vmla": VMLA_PASSING,
         "iree_llvmjit": LLVM_PASSING,
         "iree_vulkan": VULKAN_PASSING,
@@ -154,7 +154,7 @@ iree_e2e_test_suite(
 iree_vision_test_suite(
     name = "vision_internal_tests",
     backends = [
-        "tf_also",
+        "tf",
         "iree_vmla",
         "iree_llvmjit",
         "iree_vulkan",
@@ -171,7 +171,7 @@ iree_vision_test_suite(
 iree_vision_test_suite(
     name = "vision_external_tests",
     backends = [
-        "tf_also",
+        "tf",
         "iree_vmla",
         "iree_llvmjit",
         "iree_vulkan",
@@ -179,24 +179,6 @@ iree_vision_test_suite(
     datasets = [
         "cifar10",
         "imagenet",
-    ],
-    failing_configurations = [
-        # TODO(b/150244105): Compiling fails with commands targeting IREE
-        # interpreter and vulkan backends for these tests.
-        {
-            "models": [
-                "MobileNet",
-                "MobileNetV2",
-            ],
-            "datasets": [
-                "cifar10",
-                "imagenet",
-            ],
-            "backends": [
-                "iree_llvmjit",
-                "iree_vulkan",
-            ],
-        },
     ],
     models = [
         "MobileNet",

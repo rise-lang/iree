@@ -22,8 +22,8 @@
 
 #include "absl/time/time.h"
 #include "iree/base/status.h"
-#include "iree/base/status_matchers.h"
 #include "iree/testing/gtest.h"
+#include "iree/testing/status_matchers.h"
 
 // StatusOr<bool> will be true if the status is ok, which is bad.
 #define ASSERT_STATUSOR_TRUE(x) ASSERT_TRUE(x.value())
@@ -37,7 +37,7 @@ using ::testing::Return;
 
 // Tests the AlwaysSignaling helper.
 TEST(WaitHandleTest, AlwaysSignaling) {
-  ASSERT_OK(WaitHandle::AlwaysSignaling().Wait());
+  IREE_ASSERT_OK(WaitHandle::AlwaysSignaling().Wait());
   EXPECT_FALSE(WaitHandle::AlwaysSignaling().DebugString().empty());
 }
 
@@ -55,11 +55,11 @@ TEST(WaitHandleTest, LifecyclePermanentSignaled) {
 
   // Try waiting; should return immediately.
   WaitHandle wh0;
-  ASSERT_OK(wh0.Wait());
+  IREE_ASSERT_OK(wh0.Wait());
 
   // Waits on multiple permanent handles should be ok.
   WaitHandle wh1;
-  ASSERT_OK(WaitHandle::WaitAll({&wh0, &wh1}));
+  IREE_ASSERT_OK(WaitHandle::WaitAll({&wh0, &wh1}));
 }
 
 // Tests moving permanent WaitHandles around.
@@ -89,17 +89,17 @@ TEST(WaitHandleTest, MoveRealHandle) {
 // Since these just call WaitAll we leave the involved testing to those.
 TEST(WaitHandleTest, SingleWait) {
   WaitHandle wh;
-  ASSERT_OK(wh.Wait());
-  ASSERT_OK(wh.Wait(absl::Now() + absl::Seconds(1)));
-  ASSERT_OK(wh.Wait(absl::Seconds(1)));
+  IREE_ASSERT_OK(wh.Wait());
+  IREE_ASSERT_OK(wh.Wait(Now() + absl::Seconds(1)));
+  IREE_ASSERT_OK(wh.Wait(absl::Seconds(1)));
   ASSERT_STATUSOR_TRUE(wh.TryWait());
 }
 
 // Tests using WaitAll with no valid handles. This should no-op.
 TEST(WaitHandleTest, WaitAllNop) {
-  ASSERT_OK(WaitHandle::WaitAll({}));
-  ASSERT_OK(WaitHandle::WaitAll({nullptr}));
-  ASSERT_OK(WaitHandle::WaitAll({nullptr, nullptr}));
+  IREE_ASSERT_OK(WaitHandle::WaitAll({}));
+  IREE_ASSERT_OK(WaitHandle::WaitAll({nullptr}));
+  IREE_ASSERT_OK(WaitHandle::WaitAll({nullptr, nullptr}));
 }
 
 // Tests polling with WaitAll with multiple wait handles.
@@ -110,21 +110,21 @@ TEST(WaitHandleTest, WaitAllPoll) {
   WaitHandle wh1 = fence1.OnSet();
 
   // Poll; should return immediately with timeout.
-  ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAll({&wh0, &wh1}, absl::InfinitePast())));
+  ASSERT_TRUE(
+      IsDeadlineExceeded(WaitHandle::WaitAll({&wh0, &wh1}, InfinitePast())));
 
   // Notify fence1.
-  ASSERT_OK(fence1.Set());
+  IREE_ASSERT_OK(fence1.Set());
 
   // Poll; should return immediately with timeout as fence1 is not signaled.
-  ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAll({&wh0, &wh1}, absl::InfinitePast())));
+  ASSERT_TRUE(
+      IsDeadlineExceeded(WaitHandle::WaitAll({&wh0, &wh1}, InfinitePast())));
 
   // Notify fence0.
-  ASSERT_OK(fence0.Set());
+  IREE_ASSERT_OK(fence0.Set());
 
   // Poll again; should return immediately with success.
-  ASSERT_OK(WaitHandle::WaitAll({&wh0, &wh1}, absl::InfinitePast()));
+  IREE_ASSERT_OK(WaitHandle::WaitAll({&wh0, &wh1}, InfinitePast()));
 }
 
 // Tests waiting when the first file handle is invalid. This is to verify a
@@ -134,14 +134,14 @@ TEST(WaitHandleTest, WaitAllWithInvalid0) {
   WaitHandle wh = fence.OnSet();
 
   // Poll; should return immediately with timeout as fence is not signaled.
-  ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAll({nullptr, &wh}, absl::InfinitePast())));
+  ASSERT_TRUE(
+      IsDeadlineExceeded(WaitHandle::WaitAll({nullptr, &wh}, InfinitePast())));
 
   // Notify fence.
-  ASSERT_OK(fence.Set());
+  IREE_ASSERT_OK(fence.Set());
 
   // Poll again; should return immediately with success.
-  ASSERT_OK(WaitHandle::WaitAll({nullptr, &wh}, absl::InfinitePast()));
+  IREE_ASSERT_OK(WaitHandle::WaitAll({nullptr, &wh}, InfinitePast()));
 }
 
 // Tests exceeding the timeout deadline with WaitAll.
@@ -151,25 +151,24 @@ TEST(WaitHandleTest, WaitAllTimeout) {
 
   // Wait with timeout on the unsignaled fence:
   // Via polling (should never block):
-  ASSERT_TRUE(
-      IsDeadlineExceeded(WaitHandle::WaitAll({&wh}, absl::InfinitePast())));
+  ASSERT_TRUE(IsDeadlineExceeded(WaitHandle::WaitAll({&wh}, InfinitePast())));
   ASSERT_STATUSOR_FALSE(WaitHandle::TryWaitAll({&wh}));
   // Via time in the near future (should block):
   ASSERT_TRUE(
-      IsDeadlineExceeded(WaitHandle::WaitAll({&wh}, absl::Milliseconds(250))));
+      IsDeadlineExceeded(WaitHandle::WaitAll({&wh}, Milliseconds(250))));
   // Via time in the past, should exceed deadline.
   ASSERT_TRUE(
-      IsDeadlineExceeded(WaitHandle::WaitAll({&wh}, absl::Milliseconds(-250))));
+      IsDeadlineExceeded(WaitHandle::WaitAll({&wh}, Milliseconds(-250))));
 
   // Notify and ensure no more timeouts.
-  ASSERT_OK(fence.Set());
-  ASSERT_OK(WaitHandle::WaitAll({&wh}, absl::InfinitePast()));
+  IREE_ASSERT_OK(fence.Set());
+  IREE_ASSERT_OK(WaitHandle::WaitAll({&wh}, InfinitePast()));
   ASSERT_STATUSOR_TRUE(WaitHandle::TryWaitAll({&wh}));
-  ASSERT_OK(WaitHandle::WaitAll({&wh}, absl::Milliseconds(250)));
+  IREE_ASSERT_OK(WaitHandle::WaitAll({&wh}, Milliseconds(250)));
 
   // Via time in the past, should exceed deadline even if signaled.
   ASSERT_TRUE(
-      IsDeadlineExceeded(WaitHandle::WaitAll({&wh}, absl::Milliseconds(-250))));
+      IsDeadlineExceeded(WaitHandle::WaitAll({&wh}, Milliseconds(-250))));
 }
 
 // Tests using WaitAll to wait on other threads.
@@ -177,19 +176,19 @@ TEST(WaitHandleTest, WaitAllThreaded) {
   // Spin up two threads.
   ManualResetEvent fence0;
   std::thread t0{[&]() {
-    ::usleep(absl::ToInt64Microseconds(absl::Milliseconds(250)));
-    ASSERT_OK(fence0.Set());
+    ::usleep(absl::ToInt64Microseconds(Milliseconds(250)));
+    IREE_ASSERT_OK(fence0.Set());
   }};
   ManualResetEvent fence1;
   std::thread t1{[&]() {
-    ::usleep(absl::ToInt64Microseconds(absl::Milliseconds(250)));
-    ASSERT_OK(fence1.Set());
+    ::usleep(absl::ToInt64Microseconds(Milliseconds(250)));
+    IREE_ASSERT_OK(fence1.Set());
   }};
 
   // Wait on both threads to complete.
   WaitHandle wh0 = fence0.OnSet();
   WaitHandle wh1 = fence1.OnSet();
-  ASSERT_OK(WaitHandle::WaitAll({&wh0, &wh1}));
+  IREE_ASSERT_OK(WaitHandle::WaitAll({&wh0, &wh1}));
 
   t0.join();
   t1.join();
@@ -200,20 +199,20 @@ TEST(WaitHandleTest, WaitAllSameSource) {
   ManualResetEvent fence;
   WaitHandle wh0 = fence.OnSet();
   WaitHandle wh1 = fence.OnSet();
-  ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAll({&wh0, &wh1}, absl::InfinitePast())));
-  ASSERT_OK(fence.Set());
-  ASSERT_OK(WaitHandle::WaitAll({&wh0, &wh1}));
+  ASSERT_TRUE(
+      IsDeadlineExceeded(WaitHandle::WaitAll({&wh0, &wh1}, InfinitePast())));
+  IREE_ASSERT_OK(fence.Set());
+  IREE_ASSERT_OK(WaitHandle::WaitAll({&wh0, &wh1}));
 }
 
 // Tests using WaitAll with literally the same wait handles.
 TEST(WaitHandleTest, WaitAllSameHandle) {
   ManualResetEvent fence;
   WaitHandle wh = fence.OnSet();
-  ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAll({&wh, &wh}, absl::InfinitePast())));
-  ASSERT_OK(fence.Set());
-  ASSERT_OK(WaitHandle::WaitAll({&wh, &wh}));
+  ASSERT_TRUE(
+      IsDeadlineExceeded(WaitHandle::WaitAll({&wh, &wh}, InfinitePast())));
+  IREE_ASSERT_OK(fence.Set());
+  IREE_ASSERT_OK(WaitHandle::WaitAll({&wh, &wh}));
 }
 
 // Tests WaitAll when a wait handle fails.
@@ -228,9 +227,9 @@ TEST(WaitHandleTest, WaitAllFailure) {
 // Tests using WaitAny with no valid handles. This should no-op.
 TEST(WaitHandleTest, WaitAnyNop) {
   ASSERT_TRUE(IsInvalidArgument(WaitHandle::WaitAny({}).status()));
-  ASSERT_OK_AND_ASSIGN(int index, WaitHandle::WaitAny({nullptr}));
+  IREE_ASSERT_OK_AND_ASSIGN(int index, WaitHandle::WaitAny({nullptr}));
   ASSERT_EQ(0, index);
-  ASSERT_OK_AND_ASSIGN(index, WaitHandle::WaitAny({nullptr, nullptr}));
+  IREE_ASSERT_OK_AND_ASSIGN(index, WaitHandle::WaitAny({nullptr, nullptr}));
   ASSERT_EQ(0, index);
 }
 
@@ -243,22 +242,22 @@ TEST(WaitHandleTest, WaitAnyPoll) {
 
   // Poll; should return immediately with timeout.
   ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAny({&wh0, &wh1}, absl::InfinitePast()).status()));
+      WaitHandle::WaitAny({&wh0, &wh1}, InfinitePast()).status()));
 
   // Notify fence1.
-  ASSERT_OK(fence1.Set());
+  IREE_ASSERT_OK(fence1.Set());
 
   // Poll; should return immediately with fence1 signaled.
-  ASSERT_OK_AND_ASSIGN(int index,
-                       WaitHandle::WaitAny({&wh0, &wh1}, absl::InfinitePast()));
+  IREE_ASSERT_OK_AND_ASSIGN(int index,
+                            WaitHandle::WaitAny({&wh0, &wh1}, InfinitePast()));
   EXPECT_EQ(1, index);
 
   // Notify fence0.
-  ASSERT_OK(fence0.Set());
+  IREE_ASSERT_OK(fence0.Set());
 
   // Poll again; should return immediately; which one is signaled is undefined.
-  ASSERT_OK_AND_ASSIGN(index,
-                       WaitHandle::WaitAny({&wh0, &wh1}, absl::InfinitePast()));
+  IREE_ASSERT_OK_AND_ASSIGN(index,
+                            WaitHandle::WaitAny({&wh0, &wh1}, InfinitePast()));
   ASSERT_TRUE(index == 0 || index == 1);
 }
 
@@ -272,41 +271,40 @@ TEST(WaitHandleTest, WaitAnyTimeout) {
   // Wait with timeout on the unsignaled fences:
   // Via polling (should never block):
   ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAny({&wh0, &wh1}, absl::InfinitePast()).status()));
-  ASSERT_OK_AND_ASSIGN(int index, WaitHandle::TryWaitAny({&wh0, &wh1}));
+      WaitHandle::WaitAny({&wh0, &wh1}, InfinitePast()).status()));
+  IREE_ASSERT_OK_AND_ASSIGN(int index, WaitHandle::TryWaitAny({&wh0, &wh1}));
   ASSERT_EQ(-1, index);
   // Via time in the near future (should block):
   ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAny({&wh0, &wh1}, absl::Milliseconds(250)).status()));
+      WaitHandle::WaitAny({&wh0, &wh1}, Milliseconds(250)).status()));
 
   // Notify one of the fences. Should return immediately.
-  ASSERT_OK(fence1.Set());
-  ASSERT_OK_AND_ASSIGN(index,
-                       WaitHandle::WaitAny({&wh0, &wh1}, absl::InfinitePast()));
+  IREE_ASSERT_OK(fence1.Set());
+  IREE_ASSERT_OK_AND_ASSIGN(index,
+                            WaitHandle::WaitAny({&wh0, &wh1}, InfinitePast()));
   ASSERT_EQ(1, index);
-  ASSERT_OK_AND_ASSIGN(index, WaitHandle::TryWaitAny({&wh0, &wh1}));
+  IREE_ASSERT_OK_AND_ASSIGN(index, WaitHandle::TryWaitAny({&wh0, &wh1}));
   ASSERT_EQ(1, index);
-  ASSERT_OK_AND_ASSIGN(
-      index, WaitHandle::WaitAny({&wh0, &wh1}, absl::Milliseconds(250)));
+  IREE_ASSERT_OK_AND_ASSIGN(
+      index, WaitHandle::WaitAny({&wh0, &wh1}, Milliseconds(250)));
   ASSERT_EQ(1, index);
 
   // The unnotified fence should still timeout.
-  ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAny({&wh0}, absl::InfinitePast()).status()));
-  ASSERT_OK_AND_ASSIGN(index, WaitHandle::TryWaitAny({&wh0}));
+  ASSERT_TRUE(
+      IsDeadlineExceeded(WaitHandle::WaitAny({&wh0}, InfinitePast()).status()));
+  IREE_ASSERT_OK_AND_ASSIGN(index, WaitHandle::TryWaitAny({&wh0}));
   ASSERT_EQ(-1, index);
   ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAny({&wh0}, absl::Milliseconds(250)).status()));
+      WaitHandle::WaitAny({&wh0}, Milliseconds(250)).status()));
 
   // Notify last fence and ensure complete.
-  ASSERT_OK(fence0.Set());
-  ASSERT_OK_AND_ASSIGN(index,
-                       WaitHandle::WaitAny({&wh0}, absl::InfinitePast()));
+  IREE_ASSERT_OK(fence0.Set());
+  IREE_ASSERT_OK_AND_ASSIGN(index, WaitHandle::WaitAny({&wh0}, InfinitePast()));
   ASSERT_EQ(0, index);
-  ASSERT_OK_AND_ASSIGN(index, WaitHandle::TryWaitAny({&wh0}));
+  IREE_ASSERT_OK_AND_ASSIGN(index, WaitHandle::TryWaitAny({&wh0}));
   ASSERT_EQ(0, index);
-  ASSERT_OK_AND_ASSIGN(index,
-                       WaitHandle::WaitAny({&wh0}, absl::Milliseconds(250)));
+  IREE_ASSERT_OK_AND_ASSIGN(index,
+                            WaitHandle::WaitAny({&wh0}, Milliseconds(250)));
   ASSERT_EQ(0, index);
 }
 
@@ -316,24 +314,24 @@ TEST(WaitHandleTest, WaitAnyThreaded) {
   // t1 will wait on t0 such that they will act in sequence.
   ManualResetEvent fence0;
   std::thread t0{[&]() {
-    ::usleep(absl::ToInt64Microseconds(absl::Milliseconds(250)));
-    ASSERT_OK(fence0.Set());
+    ::usleep(absl::ToInt64Microseconds(Milliseconds(250)));
+    IREE_ASSERT_OK(fence0.Set());
   }};
   ManualResetEvent fence1;
   std::thread t1{[&]() {
-    ASSERT_OK(fence0.OnSet().Wait());
-    ::usleep(absl::ToInt64Microseconds(absl::Milliseconds(250)));
-    ASSERT_OK(fence1.Set());
+    IREE_ASSERT_OK(fence0.OnSet().Wait());
+    ::usleep(absl::ToInt64Microseconds(Milliseconds(250)));
+    IREE_ASSERT_OK(fence1.Set());
   }};
 
   // Wait on both threads. We expect 0 to complete first.
   WaitHandle wh0 = fence0.OnSet();
   WaitHandle wh1 = fence1.OnSet();
-  ASSERT_OK_AND_ASSIGN(int index, WaitHandle::WaitAny({&wh0, &wh1}));
+  IREE_ASSERT_OK_AND_ASSIGN(int index, WaitHandle::WaitAny({&wh0, &wh1}));
   ASSERT_EQ(0, index);
 
   // Now wait for thread 1.
-  ASSERT_OK_AND_ASSIGN(index, WaitHandle::WaitAny({&wh1}));
+  IREE_ASSERT_OK_AND_ASSIGN(index, WaitHandle::WaitAny({&wh1}));
   ASSERT_EQ(0, index);
 
   t0.join();
@@ -346,9 +344,9 @@ TEST(WaitHandleTest, WaitAnySameSource) {
   WaitHandle wh0 = fence.OnSet();
   WaitHandle wh1 = fence.OnSet();
   ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAny({&wh0, &wh1}, absl::InfinitePast()).status()));
-  ASSERT_OK(fence.Set());
-  ASSERT_OK_AND_ASSIGN(int index, WaitHandle::WaitAny({&wh0, &wh1}));
+      WaitHandle::WaitAny({&wh0, &wh1}, InfinitePast()).status()));
+  IREE_ASSERT_OK(fence.Set());
+  IREE_ASSERT_OK_AND_ASSIGN(int index, WaitHandle::WaitAny({&wh0, &wh1}));
   ASSERT_TRUE(index == 0 || index == 1);
 }
 
@@ -357,9 +355,9 @@ TEST(WaitHandleTest, WaitAnySameHandle) {
   ManualResetEvent fence;
   WaitHandle wh = fence.OnSet();
   ASSERT_TRUE(IsDeadlineExceeded(
-      WaitHandle::WaitAny({&wh, &wh}, absl::InfinitePast()).status()));
-  ASSERT_OK(fence.Set());
-  ASSERT_OK_AND_ASSIGN(int index, WaitHandle::WaitAny({&wh, &wh}));
+      WaitHandle::WaitAny({&wh, &wh}, InfinitePast()).status()));
+  IREE_ASSERT_OK(fence.Set());
+  IREE_ASSERT_OK_AND_ASSIGN(int index, WaitHandle::WaitAny({&wh, &wh}));
   ASSERT_TRUE(index == 0 || index == 1);
 }
 
@@ -386,7 +384,7 @@ class MockWaitableObject : public ::testing::StrictMock<WaitableObject> {
 
   MOCK_METHOD(std::string, DebugString, (), (const, override));
   MOCK_METHOD((StatusOr<std::pair<FdType, int>>), AcquireFdForWait,
-              (absl::Time deadline), (override));
+              (Time deadline_ns), (override));
   MOCK_METHOD(StatusOr<bool>, TryResolveWakeOnFd, (int fd), (override));
 
   WaitHandle OnSomething() { return WaitHandle(add_ref(this)); }
@@ -402,18 +400,18 @@ TEST(WaitableObjectTest, AcquireAndResolve) {
 
   // Try waiting; we should see the AcquireFdForWait and then return because
   // the fd has not been resolved.
-  EXPECT_CALL(mwo, AcquireFdForWait(_)).WillOnce([&](absl::Time deadline) {
+  EXPECT_CALL(mwo, AcquireFdForWait(_)).WillOnce([&](Time deadline_ns) {
     // Return the valid FD from the MRE.
     return mre.AcquireFdForWait(deadline);
   });
   ASSERT_STATUSOR_FALSE(wh.TryWait());
 
   // Signal the MRE.
-  ASSERT_OK(mre.Set());
+  IREE_ASSERT_OK(mre.Set());
 
   // Try waiting again; we should get the AcquireFdForWait and then also get
   // the TryResolveWakeOnFd.
-  EXPECT_CALL(mwo, AcquireFdForWait(_)).WillOnce([&](absl::Time deadline) {
+  EXPECT_CALL(mwo, AcquireFdForWait(_)).WillOnce([&](Time deadline_ns) {
     // Return the valid (and now signaled) FD from the MRE.
     return mre.AcquireFdForWait(deadline);
   });
@@ -431,13 +429,13 @@ TEST(WaitableObjectTest, AcquireFdForWaitTimeout) {
 
   // Make the AcquireFdForWait take longer than the timeout. We should hit
   // deadline exceeded even though always_wait hasn't be signaled.
-  EXPECT_CALL(mwo, AcquireFdForWait(_)).WillOnce([](absl::Time deadline) {
-    ::usleep(absl::ToInt64Microseconds(absl::Milliseconds(10)));
+  EXPECT_CALL(mwo, AcquireFdForWait(_)).WillOnce([](Time deadline_ns) {
+    ::usleep(absl::ToInt64Microseconds(Milliseconds(10)));
     return std::make_pair(WaitableObject::FdType::kPermanent,
                           WaitableObject::kInvalidFd);
   });
-  ASSERT_TRUE(IsDeadlineExceeded(WaitHandle::WaitAll(
-      {&wh, &always_signal}, absl::Now() - absl::Milliseconds(250))));
+  ASSERT_TRUE(IsDeadlineExceeded(
+      WaitHandle::WaitAll({&wh, &always_signal}, Now() - Milliseconds(250))));
 }
 
 // Tests TryResolveWakeOnFd when a handle is a permanent kSignaledFd.
@@ -492,15 +490,15 @@ TEST(ManualResetEventTest, Lifecycle) {
   ASSERT_STATUSOR_FALSE(wh0.TryWait());
   ASSERT_STATUSOR_FALSE(wh1.TryWait());
   // Set should be sticky.
-  ASSERT_OK(ev.Set());
+  IREE_ASSERT_OK(ev.Set());
   ASSERT_STATUSOR_TRUE(wh0.TryWait());
   ASSERT_STATUSOR_TRUE(wh1.TryWait());
   // Reset should clear.
-  ASSERT_OK(ev.Reset());
+  IREE_ASSERT_OK(ev.Reset());
   ASSERT_STATUSOR_FALSE(wh0.TryWait());
   ASSERT_STATUSOR_FALSE(wh1.TryWait());
   // Setting again should enable the previous WaitHandles to be signaled.
-  ASSERT_OK(ev.Set());
+  IREE_ASSERT_OK(ev.Set());
   ASSERT_STATUSOR_TRUE(wh0.TryWait());
   ASSERT_STATUSOR_TRUE(wh1.TryWait());
 }
@@ -512,27 +510,27 @@ TEST(ManualResetEventTest, Move) {
   ManualResetEvent ev1{std::move(ev0)};
   ManualResetEvent ev2 = std::move(ev1);
   ev1 = std::move(ev2);
-  ASSERT_OK(ev1.Set());
+  IREE_ASSERT_OK(ev1.Set());
   ASSERT_STATUSOR_TRUE(wh.TryWait());
 }
 
 // Tests redundantly setting and resetting ManualResetEvents.
 TEST(ManualResetEventTest, RedundantUse) {
   ManualResetEvent ev;
-  ASSERT_OK(ev.Reset());
-  ASSERT_OK(ev.Reset());
+  IREE_ASSERT_OK(ev.Reset());
+  IREE_ASSERT_OK(ev.Reset());
   ASSERT_FALSE(ev.OnSet().TryWait().value());
-  ASSERT_OK(ev.Set());
-  ASSERT_OK(ev.Set());
+  IREE_ASSERT_OK(ev.Set());
+  IREE_ASSERT_OK(ev.Set());
   ASSERT_TRUE(ev.OnSet().TryWait().value());
-  ASSERT_OK(ev.Reset());
+  IREE_ASSERT_OK(ev.Reset());
   ASSERT_FALSE(ev.OnSet().TryWait().value());
 }
 
 // Tests waiting on an initially-set ManualResetEvent;
 TEST(ManualResetEventTest, SetThenWait) {
   ManualResetEvent ev;
-  ASSERT_OK(ev.Set());
+  IREE_ASSERT_OK(ev.Set());
   ASSERT_TRUE(ev.OnSet().TryWait().value());
 }
 

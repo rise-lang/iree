@@ -12,17 +12,38 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# bazel_to_cmake: DO NOT EDIT (Special logic is used throughout this file)
+
 add_subdirectory(test)
 
-# TODO: iree_select_target_platform macros.
-# TODO: skip targets disabled by options.
-iree_select_compiler_opts(IREE_HAL_DRIVER_MODULES
-  ALL
-    "iree::hal::dylib::dylib_driver_module"
-    "iree::hal::llvmjit::llvmjit_driver_module"
-    "iree::hal::vmla::vmla_driver_module"
-    "iree::hal::vulkan::vulkan_driver_module"
-)
+# Enable compiler targets based on options.
+set(IREE_COMPILER_TARGETS "")
+set(IREE_COMPILER_TARGET_COPTS "")
+# TODO(#2645): Move LLVMAOT target under DYLIB-LLVM-AOT flag
+if(${IREE_TARGET_BACKEND_LLVM-IR})
+  list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::LLVM::LLVMAOT)
+  list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_LLVMAOT_TARGET")
+  list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::LLVM::LLVMIR)
+  list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_LLVMIR_TARGET")
+endif()
+if(${IREE_TARGET_BACKEND_VMLA})
+  list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::VMLA)
+  list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_VMLA_TARGET")
+endif()
+if(${IREE_TARGET_BACKEND_VULKAN-SPIRV})
+  list(APPEND IREE_COMPILER_TARGETS iree::compiler::Dialect::HAL::Target::VulkanSPIRV)
+  list(APPEND IREE_COMPILER_TARGET_COPTS "-DIREE_HAVE_VULKANSPIRV_TARGET")
+endif()
+
+if(IREE_ENABLE_EMITC)
+  set(IREE_OPT_CONDITIONAL_DEPS
+    MLIREmitC
+  )
+  set(IREE_TRANSLATE_CONDITIONAL_DEPS
+    MLIREmitC
+    MLIRTargetCpp
+  )
+endif()
 
 iree_cc_binary(
   NAME
@@ -36,14 +57,13 @@ iree_cc_binary(
     absl::flags
     absl::strings
     benchmark
-    iree::base::api_util
     iree::base::file_io
     iree::base::localfile
-    iree::base::source_location
     iree::base::status
     iree::base::tracing
     iree::modules::hal
     iree::testing::benchmark_main
+    iree::vm
     iree::vm::bytecode_module
     ${IREE_HAL_DRIVER_MODULES}
   TESTONLY
@@ -76,14 +96,13 @@ iree_cc_binary(
     ::vm_util
     absl::flags
     absl::strings
-    iree::base::api_util
     iree::base::file_io
     iree::base::init
     iree::base::localfile
-    iree::base::source_location
     iree::base::status
     iree::base::tracing
     iree::modules::hal
+    iree::vm
     iree::vm::bytecode_module
     ${IREE_HAL_DRIVER_MODULES}
 )
@@ -185,11 +204,12 @@ if(${IREE_BUILD_COMPILER})
       init_targets
     HDRS
       "init_targets.h"
+    SRCS
+      "init_targets.cc"
     DEPS
-      iree::compiler::Dialect::HAL::Target::LLVM::LLVMAOT
-      iree::compiler::Dialect::HAL::Target::LLVM::LLVMIR
-      iree::compiler::Dialect::HAL::Target::VMLA
-      iree::compiler::Dialect::HAL::Target::VulkanSPIRV
+      ${IREE_COMPILER_TARGETS}
+    COPTS
+      ${IREE_COMPILER_TARGET_COPTS}
     PUBLIC
   )
 
@@ -255,6 +275,7 @@ if(${IREE_BUILD_COMPILER})
       iree::compiler::Dialect::Vulkan::IR
       iree::compiler::Translation::IREEVM
       tensorflow::mlir_hlo
+      ${IREE_OPT_CONDITIONAL_DEPS}
     PUBLIC
   )
 
@@ -280,6 +301,7 @@ if(${IREE_BUILD_COMPILER})
       iree::compiler::Dialect::VM::Target::Bytecode
       iree::compiler::Dialect::VM::Target::init_targets
       iree::compiler::Translation::IREEVM
+      ${IREE_TRANSLATE_CONDITIONAL_DEPS}
     PUBLIC
   )
 
@@ -316,8 +338,8 @@ if(${IREE_BUILD_COMPILER})
       absl::span
       absl::strings
       iree::base::api
-      iree::base::api_util
       iree::base::init
+      iree::base::localfile
       iree::base::source_location
       iree::base::status
       iree::base::tracing
@@ -332,7 +354,6 @@ if(${IREE_BUILD_COMPILER})
       iree::modules::hal
       iree::vm
       iree::vm::bytecode_module
-      iree::vm::value
       ${IREE_HAL_DRIVER_MODULES}
     HOSTONLY
   )
@@ -363,18 +384,14 @@ iree_cc_library(
   DEPS
     absl::span
     absl::strings
-    iree::base::api_util
-    iree::base::buffer_string_util
-    iree::base::shape
-    iree::base::shaped_buffer
-    iree::base::shaped_buffer_string_util
+    iree::base::file_io
     iree::base::signature_mangle
     iree::base::status
     iree::hal::api
     iree::modules::hal
+    iree::vm
     iree::vm::bytecode_module
-    iree::vm::module
-    iree::vm::variant_list
+    iree::vm::ref_cc
   PUBLIC
 )
 
@@ -386,13 +403,12 @@ iree_cc_test(
   DEPS
     ::vm_util
     iree::base::api
-    iree::base::status_matchers
     iree::hal::api
     iree::hal::vmla::vmla_driver_module
     iree::modules::hal
+    iree::testing::gtest
     iree::testing::gtest_main
-    iree::vm::value
-    iree::vm::variant_list
+    iree::vm
 )
 
 if(${IREE_ENABLE_MLIR})

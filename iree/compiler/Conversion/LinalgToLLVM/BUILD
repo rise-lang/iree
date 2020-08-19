@@ -22,13 +22,15 @@ cc_library(
     name = "LinalgToLLVM",
     srcs = [
         "ConvertToLLVM.cpp",
-        "HALInterfaceToMemrefArguments.cpp",
+        "MatMulVectorization.cpp",
         "Passes.cpp",
     ],
     hdrs = [
         "Passes.h",
     ],
     deps = [
+        "//iree/compiler/Conversion/CodegenUtils",
+        "//iree/compiler/Conversion/HLOToHLO",
         "//iree/compiler/Conversion/HLOToLinalg",
         "//iree/compiler/Dialect/HAL/IR",
         "//iree/compiler/Dialect/HAL/IR:HALDialect",
@@ -36,6 +38,7 @@ cc_library(
         "//iree/compiler/Dialect/Shape/IR",
         "//iree/compiler/Dialect/Shape/Transforms",
         "@llvm-project//mlir:AffineToStandardTransforms",
+        "@llvm-project//mlir:AffineTransforms",
         "@llvm-project//mlir:CFGTransforms",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:LLVMDialect",
@@ -46,6 +49,7 @@ cc_library(
         "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:StandardOpsTransforms",
         "@llvm-project//mlir:Transforms",
+        "@llvm-project//mlir:VectorOps",
         "@llvm-project//mlir:VectorToLLVM",
         "@llvm-project//mlir:VectorToSCF",
     ],

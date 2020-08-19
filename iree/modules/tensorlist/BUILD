@@ -41,9 +41,7 @@ cc_test(
         "//iree/testing:gtest_main",
         "//iree/vm",
         "//iree/vm:bytecode_module",
-        "//iree/vm:ref",
         "//iree/vm:ref_cc",
-        "//iree/vm:variant_list",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/strings",
@@ -57,7 +55,6 @@ cc_library(
     hdrs = ["native_module.h"],
     deps = [
         "//iree/base:api",
-        "//iree/base:api_util",
         "//iree/base:ref_ptr",
         "//iree/base:status",
         "//iree/hal:api",

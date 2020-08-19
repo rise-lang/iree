@@ -135,6 +135,34 @@
 // use move semantics on the ref objects. Since we are reusing the normal VM
 // code paths which are likely still in instruction cache the bulk of the work
 // amounts to some small memcpys.
+//
+// Alternative register widths
+// ---------------------------
+// Registers in the VM are just a blob of memory and not physical device
+// registers. They have a natural width of 32-bits as that covers a majority of
+// our usage for i32/f32 but can be accessed at larger widths such as 64-bits or
+// more for vector operations. The base of each frame's register memory is
+// 16-byte aligned and accessing any individual register as a 32-bit value is
+// always 4-byte aligned.
+//
+// Supporting other register widths is "free" in that the registers for all
+// widths alias the same register storage memory. This is similar to how
+// physical registers work in x86 where each register can be accessed at
+// different sizes (like EAX/RAX alias and the SIMD registers alias as XMM1 is
+// 128-bit, YMM1 is 256-bit, and ZMM1 is 512-bit but all the same storage).
+//
+// The requirements for doing this is that the base alignment for any register
+// must be a multiple of 4 (due to the native 32-bit storage) AND aligned to the
+// natural size of the register (so 8 bytes for i64, 16 bytes for v128, etc).
+// This alignment can easily be done by masking off the low bits such that we
+// know for any valid `reg` ordinal aligned to 4 bytes `reg/N` will still be
+// within register storage. For example, i64 registers are accessed as `reg&~1`
+// to align to 8 bytes starting at byte 0 of the register storage.
+//
+// Transferring between register types can be done with vm.ext.* and vm.trunc.*
+// ops. For example, vm.trunc.i64.i32 will read an 8 byte register and write a
+// two 4 byte registers (effectively) with hi=0 and lo=the lower 32-bits of the
+// value.
 
 // Multiplier on the capacity of the stack frame storage when growing.
 // Since we never shrink stacks it's nice to keep this relative low. If we
@@ -279,13 +307,6 @@ static inline uint32_t iree_math_round_up_to_pow2_u32(uint32_t n) {
   return n;
 }
 
-// Aligns |value| up to the given power-of-two |alignment| if required.
-// https://en.wikipedia.org/wiki/Data_structure_alignment#Computing_padding
-static inline iree_host_size_t iree_math_align(iree_host_size_t value,
-                                               iree_host_size_t alignment) {
-  return (value + (alignment - 1)) & ~(alignment - 1);
-}
-
 //===----------------------------------------------------------------------===//
 // Stack implementation
 //===----------------------------------------------------------------------===//
@@ -293,9 +314,13 @@ static inline iree_host_size_t iree_math_align(iree_host_size_t value,
 IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_stack_initialize(
     iree_byte_span_t storage, iree_vm_state_resolver_t state_resolver,
     iree_allocator_t allocator, iree_vm_stack_t** out_stack) {
+  IREE_ASSERT_ARGUMENT(out_stack);
   *out_stack = NULL;
   if (storage.data_length < IREE_VM_STACK_MIN_SIZE) {
-    return IREE_STATUS_INVALID_ARGUMENT;
+    return iree_make_status(
+        IREE_STATUS_INVALID_ARGUMENT,
+        "stack storage under minimum required amount: %zu < %d",
+        storage.data_length, IREE_VM_STACK_MIN_SIZE);
   }
 
   IREE_TRACE_ZONE_BEGIN(z0);
@@ -317,7 +342,7 @@ IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_stack_initialize(
   *out_stack = stack;
 
   IREE_TRACE_ZONE_END(z0);
-  return IREE_STATUS_OK;
+  return iree_ok_status();
 }
 
 IREE_API_EXPORT void IREE_API_CALL
@@ -395,7 +420,9 @@ IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_stack_query_module_state(
 static iree_status_t iree_vm_stack_grow(iree_vm_stack_t* stack,
                                         iree_host_size_t minimum_capacity) {
   if (stack->allocator.alloc == NULL) {
-    return IREE_STATUS_RESOURCE_EXHAUSTED;
+    return iree_make_status(
+        IREE_STATUS_RESOURCE_EXHAUSTED,
+        "stack initialized on the host stack and cannot grow");
   }
 
   // Ensure we grow at least as much as required.
@@ -404,7 +431,10 @@ static iree_status_t iree_vm_stack_grow(iree_vm_stack_t* stack,
     new_capacity *= IREE_VM_STACK_GROWTH_FACTOR;
   } while (new_capacity < minimum_capacity);
   if (new_capacity > IREE_VM_STACK_MAX_SIZE) {
-    return IREE_STATUS_RESOURCE_EXHAUSTED;
+    return iree_make_status(
+        IREE_STATUS_RESOURCE_EXHAUSTED,
+        "new stack size would exceed maximum size: %zu > %d", new_capacity,
+        IREE_VM_STACK_MAX_SIZE);
   }
 
   IREE_TRACE_ZONE_BEGIN(z0);
@@ -456,7 +486,7 @@ static iree_status_t iree_vm_stack_grow(iree_vm_stack_t* stack,
   }
 
   IREE_TRACE_ZONE_END(z0);
-  return IREE_STATUS_OK;
+  return iree_ok_status();
 }
 
 // Remaps argument/result registers from a source list in the caller/callee
@@ -499,8 +529,8 @@ static void iree_vm_stack_frame_remap_registers(
     const iree_vm_register_list_t* src_reg_list,
     const iree_vm_registers_t dst_regs,
     const iree_vm_register_list_t* dst_reg_list) {
-  VMCHECK(src_reg_list->size == dst_reg_list->size);
-  if (src_reg_list->size != dst_reg_list->size) return;
+  VMCHECK(src_reg_list->size <= dst_reg_list->size);
+  if (src_reg_list->size > dst_reg_list->size) return;
   for (int i = 0; i < src_reg_list->size; ++i) {
     // TODO(benvanik): change encoding to avoid this branching.
     // Could write two arrays: one for prims and one for refs.
@@ -560,7 +590,8 @@ IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_stack_function_enter(
       ref_register_count > IREE_REF_REGISTER_MASK) {
     // Register count overflow. A valid compiler should never produce files that
     // hit this.
-    return IREE_STATUS_RESOURCE_EXHAUSTED;
+    return iree_make_status(IREE_STATUS_RESOURCE_EXHAUSTED,
+                            "register count overflow");
   }
   // NOTE: >> by the bit width is undefined so we use a 64bit mask here to
   // ensure we are ok.
@@ -624,7 +655,7 @@ IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_stack_function_enter(
   }
 
   if (out_callee_frame) *out_callee_frame = callee_frame;
-  return IREE_STATUS_OK;
+  return iree_ok_status();
 }
 
 // The external caller doesn't know the register types that it's going to be
@@ -637,6 +668,7 @@ static void iree_vm_stack_populate_external_result_list(
   VMCHECK(external_registers->size >= callee_registers->size);
   uint16_t i32_reg_ordinal = 0;
   uint16_t ref_reg_ordinal = 0;
+  ((iree_vm_register_list_t*)external_registers)->size = callee_registers->size;
   uint16_t* dst_reg_list = (uint16_t*)external_registers->registers;
   for (int i = 0; i < callee_registers->size; ++i) {
     uint16_t src_reg = callee_registers->registers[i];
@@ -655,7 +687,8 @@ IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_stack_function_leave(
     iree_vm_stack_t* stack, const iree_vm_register_list_t* result_registers,
     iree_vm_stack_frame_t** out_caller_frame) {
   if (!stack->top) {
-    return IREE_STATUS_FAILED_PRECONDITION;
+    return iree_make_status(IREE_STATUS_FAILED_PRECONDITION,
+                            "unbalanced stack leave");
   }
 
   iree_vm_stack_frame_header_t* frame_header = stack->top;
@@ -692,7 +725,7 @@ IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_stack_function_leave(
   stack->frame_storage_size -= frame_header->frame_size;
 
   if (out_caller_frame) *out_caller_frame = caller_frame;
-  return IREE_STATUS_OK;
+  return iree_ok_status();
 }
 
 IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_stack_external_enter(
@@ -707,15 +740,17 @@ IREE_API_EXPORT iree_status_t IREE_API_CALL iree_vm_stack_external_enter(
       stack, external_function, NULL, NULL, out_callee_frame));
 
   stack->top->type = IREE_VM_STACK_FRAME_EXTERNAL;
-  return IREE_STATUS_OK;
+  return iree_ok_status();
 }
 
 IREE_API_EXPORT iree_status_t IREE_API_CALL
 iree_vm_stack_external_leave(iree_vm_stack_t* stack) {
   if (!stack->top) {
-    return IREE_STATUS_FAILED_PRECONDITION;
+    return iree_make_status(IREE_STATUS_FAILED_PRECONDITION,
+                            "unbalanced stack leave");
   } else if (stack->top->type != IREE_VM_STACK_FRAME_EXTERNAL) {
-    return IREE_STATUS_FAILED_PRECONDITION;
+    return iree_make_status(IREE_STATUS_FAILED_PRECONDITION,
+                            "unbalanced stack leave (not external)");
   }
   return iree_vm_stack_function_leave(stack, NULL, NULL);
 }

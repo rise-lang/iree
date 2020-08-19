@@ -13,8 +13,9 @@
 // limitations under the License.
 
 #include "iree/compiler/Conversion/HLOToLinalg/Passes.h"
-#include "mlir/Dialect/Rise/Passes.h"
+#include "iree/compiler/Conversion/HLOToHLO/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
+#include "mlir/Dialect/Rise/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -28,7 +29,7 @@ void addHLOToLinalgOnBuffersPasses(OpPassManager &pm) {
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createLinalgFusionOfTensorOpsPass());
   pm.addPass(createHLOToLinalgOnBuffersPass());
-  pm.addPass(rise::createConvertRiseToImperativePass());
+  pm.addPass(createConvertRiseToImperativePass());
 }
 
 static PassPipelineRegistration<> hloToLinalgOnBuffersPipeline(

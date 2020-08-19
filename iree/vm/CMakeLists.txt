@@ -42,6 +42,7 @@ iree_cc_test(
     ::module
     absl::strings
     iree::base::logging
+    iree::base::status
     iree::testing::gtest_main
     iree::vm::test::all_bytecode_modules_cc
 )
@@ -53,7 +54,8 @@ iree_cc_library(
     "bytecode_module.h"
   SRCS
     "bytecode_dispatch.c"
-    "bytecode_module.cc"
+    "bytecode_dispatch_util.h"
+    "bytecode_module.c"
     "bytecode_module_impl.h"
     "bytecode_op_table.h"
   DEPS
@@ -64,13 +66,11 @@ iree_cc_library(
     ::stack
     ::type_def
     ::value
-    absl::strings
-    flatbuffers
+    flatcc::runtime
     iree::base::alignment
     iree::base::api
-    iree::base::flatbuffer_util
-    iree::base::target_platform
-    iree::schemas::bytecode_module_def_cc_fbs
+    iree::base::tracing
+    iree::schemas::bytecode_module_def_c_fbs
   PUBLIC
 )
 
@@ -97,6 +97,30 @@ iree_bytecode_module(
     bytecode_module_benchmark_module
   SRC
     "bytecode_module_benchmark.mlir"
+  CC_NAMESPACE
+    "iree::vm"
+  FLAGS
+    "-iree-vm-ir-to-bytecode-module"
+  PUBLIC
+)
+
+iree_cc_test(
+  NAME
+    bytecode_module_size_benchmark
+  SRCS
+    "bytecode_module_size_benchmark.cc"
+  DEPS
+    ::bytecode_module
+    ::bytecode_module_size_benchmark_module_cc
+    ::vm
+    iree::base::api
+)
+
+iree_bytecode_module(
+  NAME
+    bytecode_module_size_benchmark_module
+  SRC
+    "bytecode_module_size_benchmark.mlir"
   CC_NAMESPACE
     "iree::vm"
   FLAGS
@@ -165,8 +189,8 @@ iree_cc_library(
     "invocation.c"
   DEPS
     ::context
+    ::list
     ::module
-    ::variant_list
     iree::base::api
     iree::base::tracing
   PUBLIC
@@ -230,7 +254,6 @@ iree_cc_library(
     absl::span
     absl::strings
     iree::base::api
-    iree::base::api_util
     iree::base::ref_ptr
     iree::base::status
   PUBLIC
@@ -258,6 +281,7 @@ iree_cc_test(
     ::ref
     iree::base::api
     iree::base::ref_ptr
+    iree::testing::gtest
     iree::testing::gtest_main
 )
 
@@ -283,7 +307,6 @@ iree_cc_library(
   DEPS
     ::module
     ::ref
-    ::variant_list
     iree::base::alignment
     iree::base::api
     iree::base::tracing
@@ -300,6 +323,7 @@ iree_cc_test(
     ::stack
     iree::base::api
     iree::base::ref_ptr
+    iree::testing::gtest
     iree::testing::gtest_main
 )
 
@@ -324,19 +348,6 @@ iree_cc_library(
 
 iree_cc_library(
   NAME
-    variant_list
-  HDRS
-    "variant_list.h"
-  SRCS
-    "variant_list.c"
-  DEPS
-    ::ref
-    ::value
-  PUBLIC
-)
-
-iree_cc_library(
-  NAME
     vm
   HDRS
     "api.h"
@@ -351,7 +362,6 @@ iree_cc_library(
     ::stack
     ::type_def
     ::value
-    ::variant_list
     iree::base::api
   PUBLIC
 )

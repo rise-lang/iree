@@ -15,6 +15,8 @@
 iree_add_all_subdirs()
 
 file(GLOB _GLOB_X_MLIR LIST_DIRECTORIES false RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS *.mlir)
+file(GLOB _GLOB_GEMM_MLIR LIST_DIRECTORIES false RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS gemm.mlir)
+list(REMOVE_ITEM _GLOB_X_MLIR ${_GLOB_GEMM_MLIR})
 iree_check_single_backend_test_suite(
   NAME
     check_vulkan-spirv_vulkan
@@ -28,40 +30,14 @@ iree_check_single_backend_test_suite(
 
 iree_check_single_backend_test_suite(
   NAME
-    check_vulkan-spirv-split-pad-conv_vulkan
+    check_vulkan-spirv_vulkan_wgmem
   SRCS
-    "convolution1.mlir"
-    "convolution2.mlir"
-  TARGET_BACKEND
-    vulkan-spirv
-  DRIVER
-    vulkan
-)
-
-iree_check_single_backend_test_suite(
-  NAME
-    check_vulkan-spirv-nosplit-pad-conv_vulkan
-  SRCS
-    "convolution1.mlir"
-    "convolution2.mlir"
+    "conv.mlir"
+    "gemm.mlir"
   TARGET_BACKEND
     vulkan-spirv
   DRIVER
     vulkan
   COMPILER_FLAGS
-    "-iree-extract-pad-from-conv=false"
-)
-
-iree_check_single_backend_test_suite(
-  NAME
-    check_vulkan-spirv-conv-nocontrol_vulkan
-  SRCS
-    "convolution1.mlir"
-    "convolution2.mlir"
-  TARGET_BACKEND
-    vulkan-spirv
-  DRIVER
-    vulkan
-  COMPILER_FLAGS
-    "-iree-codegen-use-legacy-conv-lowering=false"
+    "-iree-spirv-use-workgroup-memory"
 )

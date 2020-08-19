@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if(NOT ${IREE_TARGET_BACKEND_VULKAN-SPIRV} OR NOT ${IREE_HAL_DRIVER_VULKAN})
+  return()
+endif()
+
 iree_bytecode_module(
   NAME
     simple_mul_bytecode_module
@@ -59,6 +63,7 @@ else()
         iree::samples::vulkan::simple_mul_bytecode_module_cc
         iree::vm
         iree::vm::bytecode_module
+        iree::vm::ref_cc
         SDL2-static
         Vulkan::Vulkan
       LINKOPTS

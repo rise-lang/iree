@@ -18,10 +18,6 @@
 # Debugging hint: Just runt his with python to see what it prints.
 """Generates a bazel BUILD file for the repo."""
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import json
 import os
 import sys
@@ -64,7 +60,7 @@ config_setting(
 
 cc_library(
     name = "python_headers",
-    hdrs = glob(["include/*.h"]),
+    hdrs = glob(["include/**/*.h"]),
     srcs = [{extra_srcs}],
     includes = ["include"],
     linkopts = [],

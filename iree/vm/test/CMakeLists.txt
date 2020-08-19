@@ -19,6 +19,8 @@ iree_cc_embed_data(
     all_bytecode_modules_cc
   GENERATED_SRCS
     "arithmetic_ops.module"
+    "arithmetic_ops_i64.module"
+    "comparison_ops.module"
     "control_flow_ops.module"
     "list_ops.module"
   CC_FILE_OUTPUT
@@ -36,6 +38,26 @@ iree_bytecode_module(
     arithmetic_ops
   SRC
     "arithmetic_ops.mlir"
+  FLAGS
+    "-iree-vm-ir-to-bytecode-module"
+  PUBLIC
+)
+
+iree_bytecode_module(
+  NAME
+    arithmetic_ops_i64
+  SRC
+    "arithmetic_ops_i64.mlir"
+  FLAGS
+    "-iree-vm-ir-to-bytecode-module"
+  PUBLIC
+)
+
+iree_bytecode_module(
+  NAME
+    comparison_ops
+  SRC
+    "comparison_ops.mlir"
   FLAGS
     "-iree-vm-ir-to-bytecode-module"
   PUBLIC

@@ -23,10 +23,10 @@
 #include "absl/base/thread_annotations.h"
 #include "absl/container/inlined_vector.h"
 #include "absl/synchronization/mutex.h"
-#include "absl/time/time.h"
 #include "iree/base/intrusive_list.h"
 #include "iree/base/ref_ptr.h"
 #include "iree/base/status.h"
+#include "iree/base/time.h"
 #include "iree/hal/command_buffer.h"
 #include "iree/hal/command_queue.h"
 #include "iree/hal/vulkan/dynamic_symbols.h"
@@ -63,7 +63,7 @@ class SerializingCommandQueue final : public CommandQueue {
 
   Status Submit(absl::Span<const SubmissionBatch> batches) override;
 
-  Status WaitIdle(absl::Time deadline) override;
+  Status WaitIdle(Time deadline_ns) override;
 
   // Releases all deferred submissions ready to submit to the GPU.
   Status AdvanceQueueSubmission();
@@ -72,14 +72,15 @@ class SerializingCommandQueue final : public CommandQueue {
   void AbortQueueSubmission();
 
  private:
+  struct PendingBatch {
+    absl::InlinedVector<SemaphoreValue, 4> wait_semaphores;
+    absl::InlinedVector<CommandBuffer*, 4> command_buffers;
+    absl::InlinedVector<SemaphoreValue, 4> signal_semaphores;
+  };
   // A submission batch together with the fence to singal its status.
-  struct FencedSubmission : IntrusiveLinkBase<void> {
-    SubmissionBatch batch;
+  struct FencedSubmission : public IntrusiveLinkBase<void> {
+    PendingBatch batch;
     ref_ptr<TimePointFence> fence;
-
-    FencedSubmission(const SubmissionBatch& batch,
-                     ref_ptr<TimePointFence> fence)
-        : batch(batch), fence(std::move(fence)) {}
   };
 
   // Processes deferred submissions in this queue and returns whether there are

@@ -12,10 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 from pyiree.tf.support import tf_test_utils
 import tensorflow.compat.v2 as tf
 
@@ -95,19 +91,17 @@ class MandelbrotModule(tf.Module):
 
 
 @tf_test_utils.compile_module(MandelbrotModule)
-class MandelbrotTest(tf_test_utils.SavedModelTestCase):
+class MandelbrotTest(tf_test_utils.TracedModuleTestCase):
 
   def test_mandelbrot(self):
-    mandelbrot = self.get_module()
 
-    # Basic view of the entire set.
-    pixels = mandelbrot.calculate(-0.7, 0.0, 3.0, 400, 100)
-    pixels.assert_all_close()
+    def mandelbrot(module):
+      # Basic view of the entire set.
+      module.calculate(-0.7, 0.0, 3.0, 400, 100)
+      # This is a much more detailed view, so more iterations are needed.
+      module.calculate(-0.7436447860, 0.1318252536, 0.0000029336, 400, 3000)
 
-    # This is a much more detailed view, so more iterations are needed.
-    pixels = mandelbrot.calculate(-0.7436447860, 0.1318252536, 0.0000029336,
-                                  400, 3000)
-    pixels.assert_all_close()
+    self.compare_backends(mandelbrot)
 
 
 if __name__ == "__main__":

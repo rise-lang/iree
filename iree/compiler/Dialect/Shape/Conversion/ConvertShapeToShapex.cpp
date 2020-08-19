@@ -16,6 +16,7 @@
 #include "iree/compiler/Dialect/Shape/IR/ShapeOps.h"
 #include "iree/compiler/Dialect/Shape/IR/ShapeTypes.h"
 #include "mlir/Dialect/Shape/IR/Shape.h"
+#include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/Dialect/Traits.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Matchers.h"
@@ -100,8 +101,28 @@ class ConvertShapeOfOp : public OpConversionPattern<shape::ShapeOfOp> {
     }
     auto resultType =
         RankedShapeType::get(tensorType.getShape(), rewriter.getContext());
-    rewriter.replaceOpWithNewOp<Shape::GetRankedShapeOp>(op, resultType,
-                                                         operands[0]);
+    // TODO(jpienaar): The following needs to be re-evaluated once the patch
+    // train from 2020/07/23 integrates properly. This is required to make
+    // it forward and backwards compatible. Also, tests need to be added once
+    // upstream integrates (and this can be tested).
+    // rewriter.replaceOpWithNewOp<Shape::GetRankedShapeOp>(op, resultType,
+    //                                                      operands[0]);
+    auto getRanked = rewriter.create<Shape::GetRankedShapeOp>(
+        op.getLoc(), resultType, operands[0]);
+
+    // For FromExtentTensorOp users, just forward the result from GetRanked.
+    SmallPtrSet<Operation *, 2> toDelete;
+    for (auto use : op.getOperation()->getUsers()) {
+      if (isa<FromExtentTensorOp>(use)) {
+        use->replaceAllUsesWith(getRanked);
+        toDelete.insert(use);
+      }
+    }
+    for (Operation *use : toDelete) {
+      rewriter.eraseOp(use);
+    }
+
+    rewriter.replaceOp(op.getOperation(), getRanked.getResult());
     return success();
   }
 };
@@ -188,6 +209,22 @@ class ConvertToExtentTensorOp
   }
 };
 
+// Currently, upstream shape lowering can use tensor<?xindex> to represent a
+// shape, and will insert tensor_cast ops to convert to specific extent tensor
+// types. However, not all tensor_cast ops are shape-related.
+class ConvertTensorCastOp : public OpConversionPattern<TensorCastOp> {
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      TensorCastOp op, ArrayRef<Value> operands,
+      ConversionPatternRewriter &rewriter) const override {
+    if (!operands[0].getType().isa<RankedShapeType>())
+      return rewriter.notifyMatchFailure(op, "not a shape-related tensor_cast");
+    rewriter.replaceOpWithNewOp<Shape::ToExtentTensorOp>(op, op.getType(),
+                                                         operands[0]);
+    return success();
+  }
+};
+
 class ConvertShapeToShapex
     : public PassWrapper<ConvertShapeToShapex, OperationPass<ModuleOp>> {
   void runOnOperation() override {
@@ -207,6 +244,7 @@ class ConvertShapeToShapex
     patterns.insert<ConvertBroadcastOp>(context);
     patterns.insert<ConvertConcatOp>(context);
     patterns.insert<ConvertToExtentTensorOp>(context);
+    patterns.insert<ConvertTensorCastOp>(context);
 
     if (failed(applyPartialConversion(module, conversionTarget, patterns))) {
       return signalPassFailure();

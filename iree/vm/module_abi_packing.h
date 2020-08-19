@@ -19,9 +19,10 @@
 #include <tuple>
 #include <utility>
 
+#include "absl/container/inlined_vector.h"
+#include "absl/types/optional.h"
 #include "absl/types/span.h"
 #include "iree/base/api.h"
-#include "iree/base/api_util.h"
 #include "iree/base/status.h"
 #include "iree/vm/builtin_types.h"
 #include "iree/vm/module.h"
@@ -122,7 +123,7 @@ struct Unpacker {
     Unpacker unpacker(registers, argument_list, variadic_segment_size_list);
     ApplyLoad<Ts...>(&unpacker, params,
                      std::make_index_sequence<sizeof...(Ts)>());
-    RETURN_IF_ERROR(unpacker.status);
+    IREE_RETURN_IF_ERROR(std::move(unpacker.status));
     return std::move(params);
   }
 
@@ -155,6 +156,30 @@ struct ParamUnpack {
         unpacker->argument_list->registers[unpacker->argument_ordinal++];
     out_param = static_cast<T>(
         unpacker->registers->i32[reg & unpacker->registers->i32_mask]);
+  }
+};
+
+template <>
+struct ParamUnpack<int64_t> {
+  using storage_type = int64_t;
+  static void Load(Unpacker* unpacker, storage_type& out_param) {
+    ++unpacker->segment_ordinal;
+    uint16_t reg =
+        unpacker->argument_list->registers[unpacker->argument_ordinal++];
+    out_param = static_cast<int64_t>(
+        unpacker->registers->i32[reg & (unpacker->registers->i32_mask & ~1)]);
+  }
+};
+
+template <>
+struct ParamUnpack<uint64_t> {
+  using storage_type = uint64_t;
+  static void Load(Unpacker* unpacker, storage_type& out_param) {
+    ++unpacker->segment_ordinal;
+    uint16_t reg =
+        unpacker->argument_list->registers[unpacker->argument_ordinal++];
+    out_param = static_cast<uint64_t>(
+        unpacker->registers->i32[reg & (unpacker->registers->i32_mask & ~1)]);
   }
 };
 
@@ -395,6 +420,24 @@ struct ResultPack {
 };
 
 template <>
+struct ResultPack<int64_t> {
+  static void Store(Packer* packer, int64_t value) {
+    uint16_t reg = packer->result_list->registers[packer->result_ordinal++];
+    packer->registers->i32[reg & (packer->registers->i32_mask & ~1)] =
+        static_cast<int64_t>(value);
+  }
+};
+
+template <>
+struct ResultPack<uint64_t> {
+  static void Store(Packer* packer, uint64_t value) {
+    uint16_t reg = packer->result_list->registers[packer->result_ordinal++];
+    packer->registers->i32[reg & (packer->registers->i32_mask & ~1)] =
+        static_cast<uint64_t>(value);
+  }
+};
+
+template <>
 struct ResultPack<opaque_ref> {
   static void Store(Packer* packer, opaque_ref value) {
     if (!value) {
@@ -483,8 +526,8 @@ struct DispatchFunctor {
                      const iree_vm_function_call_t* call,
                      iree_vm_execution_result_t* out_result) {
     iree_vm_stack_frame_t* caller_frame = iree_vm_stack_current_frame(stack);
-    ASSIGN_OR_RETURN(auto params,
-                     Unpacker::LoadSequence<Params...>(
+    IREE_ASSIGN_OR_RETURN(
+        auto params, Unpacker::LoadSequence<Params...>(
                          &caller_frame->registers, call->argument_registers,
                          call->variadic_segment_size_list));
 
@@ -520,8 +563,8 @@ struct DispatchFunctorVoid {
     }
 
     iree_vm_stack_frame_t* caller_frame = iree_vm_stack_current_frame(stack);
-    ASSIGN_OR_RETURN(auto params,
-                     Unpacker::LoadSequence<Params...>(
+    IREE_ASSIGN_OR_RETURN(
+        auto params, Unpacker::LoadSequence<Params...>(
                          &caller_frame->registers, call->argument_registers,
                          call->variadic_segment_size_list));
 

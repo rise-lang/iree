@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if(NOT ${IREE_TARGET_BACKEND_LLVM-IR})
+  return()
+endif()
+
 iree_add_all_subdirs()
 
 iree_cc_library(
@@ -97,7 +101,6 @@ iree_cc_library(
   HDRS
     "LLVMAOTTargetLinker.h"
   DEPS
-    iree::base::file_io
     iree::compiler::Dialect::HAL::Target::LLVM::internal::LLVMAOTTargetLinker_internal
   PUBLIC
 )
@@ -109,6 +112,6 @@ iree_cc_library(
     "LLVMAOTTargetLinker.h"
   DEPS
     ::LLVMTargetOptions
-    iree::base::file_io
+    iree::base::status
   PUBLIC
 )

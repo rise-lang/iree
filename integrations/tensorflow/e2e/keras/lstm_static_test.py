@@ -21,37 +21,37 @@ from pyiree.tf.support import tf_test_utils
 from pyiree.tf.support import tf_utils
 import tensorflow.compat.v2 as tf
 
-NUM_UNITS = 10
-NUM_TIMESTEPS = 24
 NUM_BATCH = 7
+NUM_TIMESTEPS = 24
+NUM_UNITS = 10
 INPUT_SHAPE = [NUM_BATCH, NUM_TIMESTEPS, NUM_UNITS]
 
 
-def lstm_module():
-  tf_utils.set_random_seed()
-  inputs = tf.keras.layers.Input(batch_size=NUM_BATCH, shape=INPUT_SHAPE[1:])
-  outputs = tf.keras.layers.LSTM(units=NUM_UNITS, return_sequences=True)(inputs)
-  model = tf.keras.Model(inputs, outputs)
-  module = tf.Module()
-  module.m = model
-  module.predict = tf.function(
-      input_signature=[tf.TensorSpec(INPUT_SHAPE, tf.float32)])(
-          model.call)
-  return module
+class LstmStaticModule(tf.Module):
+
+  def __init__(self):
+    super(LstmStaticModule, self).__init__()
+    tf_utils.set_random_seed()
+    inputs = tf.keras.layers.Input(batch_size=NUM_BATCH, shape=INPUT_SHAPE[1:])
+    outputs = tf.keras.layers.LSTM(
+        units=NUM_UNITS, return_sequences=True)(
+            inputs)
+    self.m = tf.keras.Model(inputs, outputs)
+    self.predict = tf.function(
+        input_signature=[tf.TensorSpec(INPUT_SHAPE, tf.float32)])(
+            self.m.call)
 
 
-@tf_test_utils.compile_module(lstm_module, exported_names=["predict"])
-class LstmTest(tf_test_utils.SavedModelTestCase):
+@tf_test_utils.compile_module(LstmStaticModule, exported_names=["predict"])
+class LstmStaticTest(tf_test_utils.TracedModuleTestCase):
 
   def test_lstm(self):
-    m = self.get_module()
-    m.predict(
-        tf.constant(
-            np.arange(NUM_BATCH * NUM_TIMESTEPS * NUM_UNITS,
-                      dtype=np.float32).reshape(
-                          [NUM_BATCH, NUM_TIMESTEPS, NUM_UNITS]),
-            shape=[NUM_BATCH, NUM_TIMESTEPS,
-                   NUM_UNITS])).print().assert_all_close(1e-5, 1e-5)
+
+    def predict(module):
+      inputs = tf_utils.ndarange(INPUT_SHAPE)
+      module.predict(inputs, rtol=1e-5, atol=1e-5)
+
+    self.compare_backends(predict)
 
 
 if __name__ == "__main__":

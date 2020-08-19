@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if(NOT ${IREE_HAL_DRIVER_LLVM})
+  return()
+endif()
+
 iree_add_all_subdirs()
 
 iree_cc_library(
@@ -68,7 +72,6 @@ iree_cc_library(
   SRCS
     "llvmjit_executable.cc"
   DEPS
-    ::memref_runtime
     LLVMAsmParser
     LLVMCore
     LLVMOrcJIT
@@ -94,19 +97,10 @@ iree_cc_library(
     "llvmjit_executable_cache.cc"
   DEPS
     ::llvmjit_executable
-    iree::base::source_location
     iree::base::status
     iree::base::tracing
     iree::hal::executable
     iree::hal::executable_cache
     iree::hal::executable_format
-  PUBLIC
-)
-
-iree_cc_library(
-  NAME
-    memref_runtime
-  HDRS
-    "memref_runtime.h"
   PUBLIC
 )

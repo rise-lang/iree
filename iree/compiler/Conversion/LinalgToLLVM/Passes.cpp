@@ -14,10 +14,13 @@
 
 #include "iree/compiler/Conversion/HLOToLinalg/Passes.h"
 
+#include "iree/compiler/Conversion/HLOToHLO/Passes.h"
 #include "iree/compiler/Conversion/LinalgToLLVM/Passes.h"
 #include "iree/compiler/Dialect/Shape/Transforms/Passes.h"
 #include "mlir/Conversion/SCFToStandard/SCFToStandard.h"
 #include "mlir/Dialect/Linalg/Passes.h"
+#include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Transforms/LoopUtils.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 
@@ -25,6 +28,17 @@ namespace mlir {
 namespace iree_compiler {
 
 void addLinalgToLLVMPasses(OpPassManager &passManager) {
+  // Affine optimization
+  passManager.addPass(createCanonicalizerPass());
+  passManager.addPass(createLoopTilingPass(1.0f));
+  passManager.addPass(createCanonicalizerPass());
+  passManager.addPass(createAffineVectorizePass());
+  passManager.addPass(createCanonicalizerPass());
+  passManager.addPass(createAffineScalarReplacementPass());
+  passManager.addPass(createCanonicalizerPass());
+
+  // Linalg -> Vectors Ops.
+  passManager.addPass(createMatMulTileAndVectorizePass());
   // Linalg -> SCF
   passManager.addPass(createConvertLinalgToLoopsPass());
   passManager.addPass(createCanonicalizerPass());
@@ -35,10 +49,7 @@ void addLinalgToLLVMPasses(OpPassManager &passManager) {
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createCSEPass());
 
-  // Convert ExecuableOp entry function to use memref arguments.
-  passManager.addPass(createHALInterfaceToMemrefArgumentsPass());
-
-  // (Linalg, STD) -> LLVM
+  // (HAL, IREE, Linalg, STD) -> LLVM
   // OpPassManager& llvmPassManager = passManager.nest<ModuleOp>();
   passManager.addPass(createConvertToLLVMPass());
   passManager.addPass(createCanonicalizerPass());

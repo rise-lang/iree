@@ -24,8 +24,8 @@
 #include "iree/base/signature_mangle.h"
 #include "iree/hal/api.h"
 #include "iree/modules/hal/hal_module.h"
+#include "iree/vm/list.h"
 #include "iree/vm/ref.h"
-#include "iree/vm/variant_list.h"
 
 namespace iree {
 namespace python {
@@ -184,12 +184,12 @@ void PackScalar(const RawSignatureParser::Description& desc, py::handle py_arg,
     default:
       throw RaisePyError(PyExc_NotImplementedError, "Unsupported scalar type");
   }
-  CheckApiStatus(iree_vm_variant_list_append_value(f_args.raw_ptr(), value),
+  CheckApiStatus(iree_vm_list_push_value(f_args.raw_ptr(), &value),
                  "Could not pack scalar argument");
 }
 
 py::object UnpackScalar(const RawSignatureParser::Description& desc,
-                        iree_vm_variant_t& f_result) {
+                        const iree_vm_variant_t& f_result) {
   switch (desc.scalar.type) {
     case AbiConstants::ScalarType::kUint8:
     case AbiConstants::ScalarType::kUint16:
@@ -296,12 +296,17 @@ void FunctionAbi::RawUnpack(absl::Span<const Description> descs,
   }
   for (size_t i = 0, e = descs.size(); i < e; ++i) {
     const Description& desc = descs[i];
-    iree_vm_variant_t* f_result =
-        iree_vm_variant_list_get(f_results.raw_ptr(), i);
+    iree_vm_variant_t f_result = iree_vm_variant_empty();
+    iree_status_t status =
+        iree_vm_list_get_variant(f_results.raw_ptr(), i, &f_result);
+    if (!iree_status_is_ok(status)) {
+      iree_status_ignore(status);
+      throw RaiseValueError("Could not get result from list");
+    }
     switch (desc.type) {
       case RawSignatureParser::Type::kBuffer: {
         iree_hal_buffer_view_t* buffer_view =
-            iree_hal_buffer_view_deref(&f_result->ref);
+            iree_hal_buffer_view_deref(&f_result.ref);
         if (!buffer_view) {
           throw RaiseValueError(
               "Could not deref result buffer view (wrong type?)");
@@ -315,13 +320,14 @@ void FunctionAbi::RawUnpack(absl::Span<const Description> descs,
         // Extract dims from the buffer view.
         size_t rank = 0;
         absl::InlinedVector<int32_t, 6> dims(6);
-        if (ABSL_PREDICT_FALSE(!iree_status_is_ok(iree_hal_buffer_view_shape(
-                buffer_view, dims.capacity(), dims.data(), &rank)))) {
+        iree_status_t status = iree_hal_buffer_view_shape(
+            buffer_view, dims.capacity(), dims.data(), &rank);
+        if (iree_status_is_out_of_range(status)) {
           dims.resize(rank);
-          CheckApiStatus(iree_hal_buffer_view_shape(
-                             buffer_view, dims.capacity(), dims.data(), &rank),
-                         "Error extracting shape");
+          status = iree_hal_buffer_view_shape(buffer_view, dims.capacity(),
+                                              dims.data(), &rank);
         }
+        CheckApiStatus(status, "Error extracting shape");
         dims.resize(rank);
 
         // Deal with int32_t != int (but require 32bits). Happens on some
@@ -340,7 +346,7 @@ void FunctionAbi::RawUnpack(absl::Span<const Description> descs,
                            "Ref objects not yet supported");
         break;
       case RawSignatureParser::Type::kScalar:
-        py_results[i] = UnpackScalar(desc, *f_result);
+        py_results[i] = UnpackScalar(desc, f_result);
         break;
       default:
         throw RaisePyError(PyExc_NotImplementedError,
@@ -353,7 +359,7 @@ void FunctionAbi::AllocateResults(absl::Span<const Description> descs,
                                   VmVariantList& f_args,
                                   VmVariantList& f_results) {
   if (f_args.size() != raw_config().inputs.size()) {
-    throw RaiseValueError("Mismatched AllocatResults() input arity");
+    throw RaiseValueError("Mismatched AllocateResults() input arity");
   }
 
   for (size_t i = 0, e = descs.size(); i < e; ++i) {
@@ -392,14 +398,14 @@ void FunctionAbi::AllocateResults(absl::Span<const Description> descs,
         iree_hal_buffer_view_t* buffer_view;
         CheckApiStatus(iree_hal_buffer_view_create(
                            raw_buffer, dims.data(), dims.size(), element_type,
-                           IREE_ALLOCATOR_SYSTEM, &buffer_view),
+                           iree_allocator_system(), &buffer_view),
                        "Error allocating buffer_view");
         iree_hal_buffer_release(raw_buffer);
         iree_vm_ref_t buffer_view_ref =
             iree_hal_buffer_view_move_ref(buffer_view);
-        CheckApiStatus(iree_vm_variant_list_append_ref_move(f_results.raw_ptr(),
-                                                            &buffer_view_ref),
-                       "Error moving buffer");
+        CheckApiStatus(
+            iree_vm_list_push_ref_move(f_results.raw_ptr(), &buffer_view_ref),
+            "Error moving buffer");
         break;
       }
       case RawSignatureParser::Type::kRefObject:
@@ -480,13 +486,12 @@ void FunctionAbi::PackBuffer(const RawSignatureParser::Description& desc,
   iree_hal_buffer_view_t* buffer_view;
   CheckApiStatus(iree_hal_buffer_view_create(
                      raw_buffer, dims.data(), dims.size(), element_type,
-                     IREE_ALLOCATOR_SYSTEM, &buffer_view),
+                     iree_allocator_system(), &buffer_view),
                  "Error allocating buffer_view");
   iree_hal_buffer_release(raw_buffer);
   iree_vm_ref_t buffer_view_ref = iree_hal_buffer_view_move_ref(buffer_view);
-  CheckApiStatus(
-      iree_vm_variant_list_append_ref_move(f_args.raw_ptr(), &buffer_view_ref),
-      "Error moving buffer view");
+  CheckApiStatus(iree_vm_list_push_ref_move(f_args.raw_ptr(), &buffer_view_ref),
+                 "Error moving buffer view");
 }
 
 void SetupFunctionAbiBindings(pybind11::module m) {

@@ -17,7 +17,6 @@
 #include "flatbuffers/flatbuffers.h"
 #include "iree/base/file_io.h"
 #include "iree/base/tracing.h"
-#include "iree/hal/dylib/memref_runtime.h"
 #include "iree/schemas/dylib_executable_def_generated.h"
 
 namespace iree {
@@ -27,7 +26,7 @@ namespace dylib {
 // static
 StatusOr<ref_ptr<DyLibExecutable>> DyLibExecutable::Load(ExecutableSpec spec) {
   auto executable = make_ref<DyLibExecutable>();
-  RETURN_IF_ERROR(executable->Initialize(spec));
+  IREE_RETURN_IF_ERROR(executable->Initialize(spec));
   return executable;
 }
 
@@ -60,8 +59,8 @@ Status DyLibExecutable::Initialize(ExecutableSpec spec) {
   // library APIs work with files. We could instead use in-memory files on
   // platforms where that is convenient.
   std::string base_name = "dylib_executable";
-  ASSIGN_OR_RETURN(executable_library_temp_path_,
-                   file_io::GetTempFile(base_name));
+  IREE_ASSIGN_OR_RETURN(executable_library_temp_path_,
+                        file_io::GetTempFile(base_name));
   // Add platform-specific file extensions so opinionated dynamic library
   // loaders are more likely to find the file:
 #if defined(IREE_PLATFORM_WINDOWS)
@@ -74,11 +73,12 @@ Status DyLibExecutable::Initialize(ExecutableSpec spec) {
       reinterpret_cast<const char*>(
           dylib_executable_def->library_embedded()->data()),
       dylib_executable_def->library_embedded()->size());
-  RETURN_IF_ERROR(file_io::SetFileContents(executable_library_temp_path_,
-                                           embedded_library_data));
+  IREE_RETURN_IF_ERROR(file_io::SetFileContents(executable_library_temp_path_,
+                                                embedded_library_data));
 
-  ASSIGN_OR_RETURN(executable_library_,
-                   DynamicLibrary::Load(executable_library_temp_path_.c_str()));
+  IREE_ASSIGN_OR_RETURN(
+      executable_library_,
+      DynamicLibrary::Load(executable_library_temp_path_.c_str()));
 
   const auto& entry_points = *dylib_executable_def->entry_points();
   entry_functions_.resize(entry_points.size());
@@ -96,15 +96,9 @@ Status DyLibExecutable::Initialize(ExecutableSpec spec) {
 
 struct DyLibDispatchState : public HostExecutable::DispatchState {
   DyLibDispatchState() = default;
-  ~DyLibDispatchState() override {
-    for (int i = 0; i < descriptors.size(); ++i) {
-      freeUnrankedDescriptor(descriptors[i]);
-    }
-  }
-
   void* entry_function = nullptr;
-  absl::InlinedVector<UnrankedMemRefType<uint32_t>*, 4> descriptors;
   absl::InlinedVector<void*, 4> args;
+  absl::InlinedVector<int32_t, 4> push_constant;
 };
 
 StatusOr<ref_ptr<HostExecutable::DispatchState>>
@@ -123,14 +117,17 @@ DyLibExecutable::PrepareDispatch(const DispatchParams& params) {
     for (size_t binding = 0; binding < params.set_bindings[set].size();
          ++binding) {
       const auto& io_binding = params.set_bindings[set][binding];
-      ASSIGN_OR_RETURN(auto memory, io_binding.buffer->MapMemory<uint8_t>(
-                                        MemoryAccessBitfield::kWrite,
-                                        io_binding.offset, io_binding.length));
+      IREE_ASSIGN_OR_RETURN(auto memory,
+                            io_binding.buffer->MapMemory<uint8_t>(
+                                MemoryAccessBitfield::kWrite, io_binding.offset,
+                                io_binding.length));
       auto data = memory.mutable_data();
-      auto descriptor = allocUnrankedDescriptor<uint32_t>(data);
-      dispatch_state->descriptors.push_back(descriptor);
-      dispatch_state->args.push_back(&descriptor->descriptor);
+
+      dispatch_state->args.push_back(data);
     }
+  }
+  for (int i = 0; i < params.push_constants->values.size(); ++i) {
+    dispatch_state->push_constant.push_back(params.push_constants->values[i]);
   }
 
   return std::move(dispatch_state);
@@ -141,8 +138,10 @@ Status DyLibExecutable::DispatchTile(DispatchState* state,
   IREE_TRACE_SCOPE0("DyLibExecutable::DispatchTile");
   auto* dispatch_state = static_cast<DyLibDispatchState*>(state);
 
-  auto entry_function = (void (*)(void**))dispatch_state->entry_function;
-  entry_function(dispatch_state->args.data());
+  auto entry_function =
+      (void (*)(void**, int32_t*))dispatch_state->entry_function;
+  entry_function(dispatch_state->args.data(),
+                 dispatch_state->push_constant.data());
 
   return OkStatus();
 }

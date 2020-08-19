@@ -23,7 +23,6 @@ load(
     "INTREE_TENSORFLOW_PY_DEPS",
     "NUMPY_DEPS",
     "iree_py_binary",
-    "iree_py_test",
 )
 load(
     "//integrations/tensorflow/e2e:iree_e2e_test_suite.bzl",
@@ -54,7 +53,6 @@ package(
 # backends.
 # keep sorted
 SPECIAL_CASES = [
-    "explicit_backend_test.py",
     "linspace_test.py",
 ]
 
@@ -69,7 +67,6 @@ VMLA_FAILING = [
 # keep sorted
 LLVM_FAILING = [
     "broadcasting_test.py",
-    "depth_conv_test.py",
     "dynamic_mlp_relu_test.py",
     "dynamic_mlp_test.py",
     "fill_test.py",  # TODO(jennik): Get this test working on IREE.
@@ -84,8 +81,6 @@ LLVM_FAILING = [
 VULKAN_FAILING = [
     "broadcasting_test.py",
     "control_flow_test.py",
-    "conv_test.py",
-    "depth_conv_test.py",
     "dynamic_mlp_relu_test.py",
     "dynamic_mlp_test.py",
     "fill_test.py",  # TODO(jennik): Get this test working on IREE.
@@ -119,7 +114,7 @@ VULKAN_PASSING = glob(
 iree_e2e_test_suite(
     name = "e2e_tests",
     backends_to_srcs = {
-        "tf_also": TF_PASSING,
+        "tf": TF_PASSING,
         "iree_vmla": VMLA_PASSING,
         "iree_llvmjit": LLVM_PASSING,
         "iree_vulkan": VULKAN_PASSING,
@@ -156,7 +151,7 @@ iree_e2e_test_suite(
     # TODO(#2082): `linspace_test.py` fails in the `bazel-tensorflow` image.
     name = "linspace_tests",
     backends_to_srcs = {
-        "tf_also": ["linspace_test.py"],
+        "tf": ["linspace_test.py"],
         "iree_vmla": ["linspace_test.py"],
     },
     reference_backend = "tf",
@@ -181,23 +176,6 @@ iree_e2e_test_suite(
         "manual",
         "nokokoro",
         "notap",
-    ],
-    deps = INTREE_TENSORFLOW_PY_DEPS + NUMPY_DEPS + [
-        "//integrations/tensorflow/bindings/python/pyiree/tf/support",
-    ],
-)
-
-# This tests explicitly writing which backends to use in Python,
-# so overriding the backends can cause it to break.
-iree_py_test(
-    name = "explicit_backend_test",
-    srcs = ["explicit_backend_test.py"],
-    main = "explicit_backend_test.py",
-    python_version = "PY3",
-    tags = [
-        "driver=llvmjit",
-        "driver=vmla",
-        "driver=vulkan",
     ],
     deps = INTREE_TENSORFLOW_PY_DEPS + NUMPY_DEPS + [
         "//integrations/tensorflow/bindings/python/pyiree/tf/support",

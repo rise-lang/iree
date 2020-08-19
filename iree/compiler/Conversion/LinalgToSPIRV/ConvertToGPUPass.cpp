@@ -17,8 +17,13 @@
 // Partition computation within dispatch function to workgroups/workitems.
 //
 //===----------------------------------------------------------------------===//
+
+#include <array>
+#include <numeric>
+
 #include "iree/compiler/Conversion/LinalgToSPIRV/Attributes.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/MarkerUtils.h"
+#include "iree/compiler/Conversion/LinalgToSPIRV/MemorySpace.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/Passes.h"
 #include "iree/compiler/Conversion/LinalgToSPIRV/Utils.h"
 #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
@@ -27,6 +32,7 @@
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
 #include "mlir/Dialect/Linalg/Transforms/Transforms.h"
 #include "mlir/Dialect/SCF/SCF.h"
+#include "mlir/Dialect/SPIRV/SPIRVOps.h"
 #include "mlir/Dialect/SPIRV/TargetAndABI.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
 #include "mlir/IR/AffineMap.h"
@@ -38,21 +44,20 @@
 namespace mlir {
 namespace iree_compiler {
 
+static constexpr int kNumDims = 3;
+
+/// In some cases the iterations of the loops when partitioned to workgroups
+/// need to be distributed in a cyclic manner. The main use case here is when
+/// the number of workgroups is constrained such that the number of iterations
+/// is greater than or equal to number of processors (along any dimension). In
+/// those cases, distribute the iterations in a cyclic manner. This adds
+/// additional control flow, but isn't too detrimental to performance since they
+/// are convergent for the most part.
 static llvm::cl::opt<bool> isWorkgroupCountConstrained(
     "iree-codegen-constrained-workgroup-count",
     llvm::cl::desc("Specify whether the number of workgroups can be assumed to "
                    "be large enough to cover the entire workload"),
     llvm::cl::init(false));
-
-// TODO(#2134): Remove this flag/set it to false always when issue with
-// convolution is resolved (see bug for more details).
-// TODO(#2346): Make this a pass specific option.
-llvm::cl::opt<bool> useLegacyConvLowering{
-    "iree-codegen-use-legacy-conv-lowering",
-    llvm::cl::desc("Use conv lowering that does not assume 1:1 mapping "
-                   "between threads within a block and iterations of "
-                   "parallel loops distributed to the block"),
-    llvm::cl::init(true)};
 
 //===----------------------------------------------------------------------===//
 // Loop utilities
@@ -326,30 +331,27 @@ static LogicalResult distributeSingleIterationPerProcessor(
   assert(numLoops == processorIDs.size() &&
          "expected as many ids as number of loops");
 
-  TypeConverter::SignatureConversion signatureConverter(numLoops);
   auto lbs = pLoopOp.lowerBound();
   auto step = pLoopOp.step();
-  auto ubs = pLoopOp.upperBound();
-  Value cond = nullptr;
+  SmallVector<Value, 2> ivReplacements;
   for (unsigned i : llvm::seq<unsigned>(0, numLoops)) {
     Value iterValue = rewriter.create<AddIOp>(
         loc, lbs[i], rewriter.create<MulIOp>(loc, processorIDs[i], step[i]));
-    Value cmp =
-        rewriter.create<CmpIOp>(loc, CmpIPredicate::slt, iterValue, ubs[i]);
-    cond = (cond ? rewriter.create<AndOp>(loc, cond, cmp) : cmp);
-    signatureConverter.remapInput(i, iterValue);
+    ivReplacements.push_back(iterValue);
   }
   Region &pLoopOpRegion = pLoopOp.getLoopBody();
-  rewriter.applySignatureConversion(&pLoopOpRegion, signatureConverter);
 
   if (generateGuard) {
+    TypeConverter::SignatureConversion signatureConverter(numLoops);
     Value cond = nullptr;
     auto ubs = pLoopOp.upperBound();
     for (unsigned i : llvm::seq<unsigned>(0, numLoops)) {
       Value cmp = rewriter.create<CmpIOp>(loc, CmpIPredicate::slt,
-                                          processorIDs[i], ubs[i]);
+                                          ivReplacements[i], ubs[i]);
       cond = (cond ? rewriter.create<AndOp>(loc, cond, cmp) : cmp);
+      signatureConverter.remapInput(i, ivReplacements[i]);
     }
+    rewriter.applySignatureConversion(&pLoopOpRegion, signatureConverter);
     scf::IfOp ifOp = buildEmptyIfOp(loc, rewriter, cond);
     Region &ifOpRegion = ifOp.getRegion(0);
     rewriter.inlineRegionBefore(pLoopOpRegion, ifOpRegion, ifOpRegion.begin());
@@ -363,18 +365,13 @@ static LogicalResult distributeSingleIterationPerProcessor(
     //   scf.parallel's region, and from the latter to the block created by the
     //   split operation.
     // - Canonicalization will fold these branches away.
-    Block *parentBlock = pLoopOp.getOperation()->getBlock();
-    Block *newBlock =
-        rewriter.splitBlock(parentBlock, Block::iterator(pLoopOp));
-    Block &pLoopOpBody = pLoopOpRegion.front();
-    OpBuilder::InsertionGuard guard(rewriter);
-    rewriter.inlineRegionBefore(pLoopOpRegion, *parentBlock->getParent(),
-                                Region::iterator(newBlock));
-    rewriter.setInsertionPointToEnd(parentBlock);
-    rewriter.create<BranchOp>(loc, &pLoopOpBody);
-    rewriter.setInsertionPointToEnd(&pLoopOpBody);
-    rewriter.replaceOpWithNewOp<BranchOp>(pLoopOpBody.getTerminator(),
-                                          newBlock);
+    Block *destBlock = pLoopOp.getOperation()->getBlock();
+    Block *remainingInst =
+        rewriter.splitBlock(destBlock, Block::iterator(pLoopOp));
+    Block *sourceBlock = &pLoopOpRegion.front();
+    rewriter.eraseOp(sourceBlock->getTerminator());
+    rewriter.mergeBlocks(&pLoopOpRegion.front(), destBlock, ivReplacements);
+    rewriter.mergeBlocks(remainingInst, destBlock, {});
   }
   rewriter.eraseOp(pLoopOp);
   return success();
@@ -425,7 +422,7 @@ static void getGPUProcessorIdsAndCounts(Location loc,
                                         unsigned numDims,
                                         MutableArrayRef<Value> id,
                                         MutableArrayRef<Value> count) {
-  ArrayRef<StringRef> dims = {"x", "y", "z"};
+  std::array<StringRef, kNumDims> dims{"x", "y", "z"};
   assert(id.size() == numDims);
   assert(count.size() == numDims);
   for (unsigned i = 0; i < numDims; ++i) {
@@ -434,6 +431,24 @@ static void getGPUProcessorIdsAndCounts(Location loc,
     id[numDims - 1 - i] = idAndCount.id;
     count[numDims - 1 - i] = idAndCount.count;
   }
+}
+
+template <typename GPUIdOp, typename GPUCountOp>
+static ProcessorIdAndCount getLinearizedGPUProcessorIdAndCount(
+    Location loc, ConversionPatternRewriter &rewriter) {
+  std::array<Value, kNumDims> ids, counts;
+  getGPUProcessorIdsAndCounts<GPUIdOp, GPUCountOp>(loc, rewriter, kNumDims, ids,
+                                                   counts);
+  ProcessorIdAndCount linearized;
+  linearized.id = ids[0];
+  linearized.count = counts[0];
+  for (unsigned i = 0; i < kNumDims - 1; ++i) {
+    linearized.id = rewriter.create<MulIOp>(loc, linearized.id, counts[i + 1]);
+    linearized.id = rewriter.create<AddIOp>(loc, linearized.id, ids[i + 1]);
+    linearized.count =
+        rewriter.create<MulIOp>(loc, linearized.count, counts[i + 1]);
+  }
+  return linearized;
 }
 
 /// Distributes scf.parallel to processors where `IdOp` is used to get the
@@ -479,16 +494,22 @@ static LogicalResult distributeSingleIterationPerProcessor(
 static LogicalResult mapToWorkgroups(ConversionPatternRewriter &rewriter,
                                      scf::ParallelOp pLoopOp,
                                      bool useCyclicDistribution = false) {
-  if (useCyclicDistribution)
+  if (useCyclicDistribution) {
     return distributeCyclicallyToProcessors<gpu::BlockIdOp, gpu::GridDimOp>(
         rewriter, pLoopOp);
+  }
   return distributeSingleIterationPerProcessor<gpu::BlockIdOp, gpu::GridDimOp>(
       rewriter, pLoopOp, false);
 }
 
 /// Distributes scf.parallel to workitems using local invocation ID.
-static LogicalResult mapToLocalInvocationId(ConversionPatternRewriter &rewriter,
-                                            scf::ParallelOp pLoopOp) {
+static LogicalResult mapToLocalInvocationId(
+    ConversionPatternRewriter &rewriter, scf::ParallelOp pLoopOp,
+    bool useCyclicDistribution = false) {
+  if (useCyclicDistribution) {
+    return distributeCyclicallyToProcessors<gpu::ThreadIdOp, gpu::BlockDimOp>(
+        rewriter, pLoopOp);
+  }
   return distributeSingleIterationPerProcessor<gpu::ThreadIdOp,
                                                gpu::BlockDimOp>(rewriter,
                                                                 pLoopOp);
@@ -503,22 +524,47 @@ static LogicalResult mapToGlobalInvocationId(
       rewriter, pLoopOp);
 }
 
+/// Returns the number of bytes copied when loading to/storing from workgorup
+/// memory. It is approximated to be the size of the underlying allocation being
+/// copied into/from.
+static Optional<int64_t> getLinearizedCopySize(linalg::CopyOp copyOp) {
+  Value src = copyOp.input();
+  Value dst = copyOp.output();
+  MemRefType srcType = src.getType().cast<MemRefType>();
+  MemRefType dstType = dst.getType().cast<MemRefType>();
+
+  Value workgroupMemoryView;
+  MemRefType workgroupMemoryType;
+  if (srcType.getMemorySpace() == getWorkgroupMemorySpace()) {
+    workgroupMemoryView = src;
+    workgroupMemoryType = srcType;
+  } else if (dstType.getMemorySpace() == getWorkgroupMemorySpace()) {
+    workgroupMemoryView = dst;
+    workgroupMemoryType = dstType;
+  } else {
+    return {};
+  }
+
+  SubViewOp workgroupMemorySubviewOp =
+      dyn_cast_or_null<SubViewOp>(workgroupMemoryView.getDefiningOp());
+  if (!workgroupMemorySubviewOp) return {};
+  AllocOp allocOp = dyn_cast_or_null<AllocOp>(
+      workgroupMemorySubviewOp.source().getDefiningOp());
+  if (!allocOp) return {};
+
+  MemRefType allocOpType = allocOp.getType();
+  if (!allocOpType.hasStaticShape()) return {};
+  return allocOpType.getNumElements();
+}
+
 //===----------------------------------------------------------------------===//
 // Pass and patterns.
 //===----------------------------------------------------------------------===//
 
-/// In some cases the iterations of the loops when partitioned to workgroups
-/// need to be distributed in a cyclic manner. The main use cases here is when
-/// the number of workgroups is constrained such that the number of iterations
-/// is greater than equal to number of processors (along any dimension). In
-/// those cases, distribute the iterations in a cyclic manner. This adds
-/// additional control flow, but isn't too detrimental to performance since they
-/// are convergent for the most part.
 // TODO(#2134): Mapping iterations to processors directly by assuming number of
 // iterations <= number of processors again seems to have an issue with
 // convolution/pooling. Needs further investigation.
 static bool useCyclicLoopDistribution(scf::ParallelOp pLoopOp) {
-  if (!useLegacyConvLowering) return false;
   auto walkResult = pLoopOp.walk([](Operation *op) -> WalkResult {
     if (isa<linalg::ConvOp>(op) || isa<linalg::PoolingMaxOp>(op) ||
         isa<linalg::PoolingMinOp>(op) || isa<linalg::PoolingSumOp>(op))
@@ -550,6 +596,70 @@ struct PartitionPLoopToWorkgroups
   }
 };
 
+/// Implementation of the mapping of tiled linalg op to workitems within a
+/// workgroup.
+template <typename LinalgOpTy>
+static LogicalResult mapLinalgOpToLocalInvocationIdImpl(
+    LinalgOpTy linalgOp, ArrayRef<Value> operands,
+    ConversionPatternRewriter &rewriter) {
+  // Check for marker that specifies that the linalg op is to be partitioned
+  // across threads within a workgroup.
+  if (!hasMarker(linalgOp)) return failure();
+  Optional<linalg::LinalgLoops> loops =
+      linalg::linalgLowerOpToLoops<scf::ParallelOp>(rewriter, linalgOp);
+  if (!loops) return failure();
+  if (loops.getValue().empty()) return success();
+
+  scf::ParallelOp pLoopOp = dyn_cast<scf::ParallelOp>(loops.getValue()[0]);
+  if (!pLoopOp) return success();
+
+  return mapToLocalInvocationId(
+      rewriter, pLoopOp,
+      hasMarker(linalgOp, {getWorkgroupMarker(), getWorkgroupMemoryMarker()}));
+}
+
+/// CopyOp that are loading to/storing from workgroup memory are special cased
+/// to use all workitems to do a copy. This is done by linearizing the copy
+/// operation.
+// TODO(ravishankarm): This linearization is achieved through collapsing the
+// generated parallel loops from a multi-dimensional copy. Such lowering results
+// in mods/divs in the collapsed loop body. This can be removed by reshaping the
+// copy to be a 1D copy. This seems to be hitting an error in reshape
+// canonicalization. Investigate this further.
+template <>
+LogicalResult mapLinalgOpToLocalInvocationIdImpl<linalg::CopyOp>(
+    linalg::CopyOp copyOp, ArrayRef<Value> operands,
+    ConversionPatternRewriter &rewriter) {
+  if (!hasMarker(copyOp, getCopyToWorkgroupMemoryMarker())) return failure();
+  Optional<linalg::LinalgLoops> loops =
+      linalg::linalgLowerOpToLoops<scf::ParallelOp>(rewriter, copyOp);
+  if (!loops) return failure();
+  if (loops.getValue().empty()) return success();
+
+  scf::ParallelOp pLoopOp = dyn_cast<scf::ParallelOp>(loops.getValue()[0]);
+  if (!pLoopOp) return success();
+  pLoopOp = collapseParallelLoops(rewriter, pLoopOp);
+  if (!pLoopOp) return failure();
+
+  Optional<int64_t> copyLength = getLinearizedCopySize(copyOp);
+  ProcessorIdAndCount idAndCount =
+      getLinearizedGPUProcessorIdAndCount<gpu::ThreadIdOp, gpu::BlockDimOp>(
+          copyOp.getLoc(), rewriter);
+  auto workgroupSize =
+      spirv::lookupLocalWorkGroupSize(copyOp).getValues<APInt>();
+  int64_t linearizedWorkgroupSize = std::accumulate(
+      workgroupSize.begin(), workgroupSize.end(), 1,
+      [](int64_t total, APInt value) { return total * value.getSExtValue(); });
+
+  if (copyLength.hasValue() && !workgroupSize.empty() &&
+      copyLength.getValue() <= linearizedWorkgroupSize) {
+    return distributeSingleIterationPerProcessor(
+        rewriter, pLoopOp, idAndCount.id, /*generateGuard=*/true);
+  }
+  return distributeCyclicallyToProcessors(rewriter, pLoopOp, idAndCount.id,
+                                          idAndCount.count);
+}
+
 /// Map tiled linalg op to workitems by lowering it to scf.parallel and
 /// partitioning it to workitems.
 template <typename LinalgOpTy>
@@ -558,41 +668,20 @@ struct MapLinalgOpToLocalInvocationId : public OpConversionPattern<LinalgOpTy> {
   LogicalResult matchAndRewrite(
       LinalgOpTy linalgOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    // Check for marker that specifies that the linalg op is to be partitioned
-    // across threads within a workgroup.
-    if (!hasWorkItemMarker(linalgOp)) return failure();
-    Optional<linalg::LinalgLoops> loops =
-        linalg::linalgLowerOpToLoops<scf::ParallelOp>(rewriter, linalgOp);
-    if (!loops) return failure();
-    if (!loops.getValue().empty()) {
-      scf::ParallelOp pLoopOp = dyn_cast<scf::ParallelOp>(loops.getValue()[0]);
-      if (!pLoopOp || failed(mapToLocalInvocationId(rewriter, pLoopOp)))
-        return failure();
-    }
-    rewriter.eraseOp(linalgOp);
-    return success();
-  }
-};
-
-/// Legacy path for lowering tiled conv/pooling op to loops.
-// TODO(#2134): Remove this pattern. The default path of using
-// `MapLinalgOpToLocalInvocationId` seems to have a bug. It only shows up
-// currently on Resnet50. Remove this pattern after the bug is triaged/fixed.
-template <typename LinalgOpTy>
-struct MapConvPoolToLocalInvocationId : public OpConversionPattern<LinalgOpTy> {
-  using OpConversionPattern<LinalgOpTy>::OpConversionPattern;
-  LogicalResult matchAndRewrite(
-      LinalgOpTy linalgOp, ArrayRef<Value> operands,
-      ConversionPatternRewriter &rewriter) const override {
-    if (!hasWorkItemMarker(linalgOp)) return failure();
-    Optional<linalg::LinalgLoops> loops =
-        linalg::linalgLowerOpToLoops<scf::ParallelOp>(rewriter, linalgOp);
-    if (!loops) return failure();
-    scf::ParallelOp pLoopOp = cast<scf::ParallelOp>(loops.getValue()[0]);
     if (failed(
-            distributeCyclicallyToProcessors<gpu::ThreadIdOp, gpu::BlockDimOp>(
-                rewriter, pLoopOp)))
+            mapLinalgOpToLocalInvocationIdImpl(linalgOp, operands, rewriter)))
       return failure();
+
+    // If the `linalgOp` writes to workgroup memory insert barrier after the
+    // op.
+    if (llvm::any_of(linalgOp.getOperands(), [](Value output) {
+          return output.getType().cast<MemRefType>().getMemorySpace() ==
+                 getWorkgroupMemorySpace();
+        })) {
+      rewriter.create<spirv::ControlBarrierOp>(
+          linalgOp.getLoc(), spirv::Scope::Workgroup, spirv::Scope::Workgroup,
+          spirv::MemorySemantics::AcquireRelease);
+    }
     rewriter.eraseOp(linalgOp);
     return success();
   }
@@ -679,39 +768,18 @@ void ConvertToGPUPass::runOnFunction() {
 
   OwningRewritePatternList patterns;
 
-  // clang-format off
-  patterns.insert<
-
-#define ADD_ALL_LINALG_PATTERNS(OP_NAME)                                       \
-    MapLinalgOpToGlobalInvocationId<OP_NAME>,                                  \
-    MapLinalgOpToLocalInvocationId<OP_NAME>
-
-    ADD_ALL_LINALG_PATTERNS(linalg::CopyOp),
-    ADD_ALL_LINALG_PATTERNS(linalg::FillOp),
-    ADD_ALL_LINALG_PATTERNS(linalg::GenericOp),
-    ADD_ALL_LINALG_PATTERNS(linalg::IndexedGenericOp),
-
-#undef ADD_ALL_LINALG_PATTERNS
-
-#define ADD_ALL_CONV_POOL_PATTERNS(OP_NAME)                                    \
-    MapConvPoolToLocalInvocationId<OP_NAME>,                                   \
-    MapLinalgOpToGlobalInvocationId<OP_NAME>
-
-    ADD_ALL_CONV_POOL_PATTERNS(linalg::PoolingMaxOp),
-    ADD_ALL_CONV_POOL_PATTERNS(linalg::PoolingMinOp),
-    ADD_ALL_CONV_POOL_PATTERNS(linalg::PoolingSumOp),
-
-#undef ADD_ALL_CONV_POOL_PATTERNS
-
-    MapLinalgOpToLocalInvocationId<linalg::MatmulOp>,
-    PartitionPLoopToWorkgroups, RemoveLinalgRange>(context);
-  // clang-format on
-
-  patterns.insert<MapLinalgOpToGlobalInvocationId<linalg::ConvOp>>(context);
-  if (useLegacyConvLowering)
-    patterns.insert<MapConvPoolToLocalInvocationId<linalg::ConvOp>>(context);
-  else
-    patterns.insert<MapLinalgOpToLocalInvocationId<linalg::ConvOp>>(context);
+  patterns.insert<MapLinalgOpToGlobalInvocationId<linalg::CopyOp>,
+                  MapLinalgOpToGlobalInvocationId<linalg::FillOp>,
+                  MapLinalgOpToGlobalInvocationId<linalg::GenericOp>,
+                  MapLinalgOpToGlobalInvocationId<linalg::IndexedGenericOp>,
+                  MapLinalgOpToLocalInvocationId<linalg::ConvOp>,
+                  MapLinalgOpToLocalInvocationId<linalg::CopyOp>,
+                  MapLinalgOpToLocalInvocationId<linalg::MatmulOp>,
+                  MapLinalgOpToLocalInvocationId<linalg::BatchMatmulOp>,
+                  MapLinalgOpToLocalInvocationId<linalg::PoolingMaxOp>,
+                  MapLinalgOpToLocalInvocationId<linalg::PoolingMinOp>,
+                  MapLinalgOpToLocalInvocationId<linalg::PoolingSumOp>,
+                  PartitionPLoopToWorkgroups, RemoveLinalgRange>(context);
 
   if (failed(applyFullConversion(funcOp, target, patterns)))
     return signalPassFailure();

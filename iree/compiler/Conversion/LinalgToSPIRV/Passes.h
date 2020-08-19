@@ -22,6 +22,13 @@
 namespace mlir {
 namespace iree_compiler {
 
+// Options that can be used to configure SPIR-V codegeneration.
+struct SPIRVCodegenOptions {
+  SmallVector<int64_t, 3> workgroupSize = {};
+  SmallVector<int64_t, 3> tileSizes = {};
+  bool useWorkgroupMemory = false;
+};
+
 /// Pass to tile and fuse linalg operations on buffers. The pass takes as
 /// argument the `workgroupSize` that the tiling should use. Note that the
 /// tile-sizes are the reverse of the workgroup size. So workgroup size along
@@ -29,7 +36,8 @@ namespace iree_compiler {
 /// it exists) and along "z" for the next loop (if it exists). The workgroup
 /// size is expected to be of size at-most 3.
 std::unique_ptr<OperationPass<FuncOp>> createLinalgTileAndFusePass(
-    ArrayRef<int64_t> workGroupSize = {}, bool useWorkgroupMem = false);
+    ArrayRef<int64_t> workGroupSize = {}, ArrayRef<int64_t> tileSizes = {},
+    bool useWorkgroupMem = false);
 
 /// Pass to add the synchronizations and attributes needed to lower from PLoops
 /// to GPU dialect.
@@ -54,6 +62,9 @@ std::unique_ptr<OperationPass<ModuleOp>> createSplitDispatchFunctionPass();
 /// vector size equal to subgroup size are distributed across the subgroup.
 std::unique_ptr<OperationPass<FuncOp>> createVectorToGPUPass();
 
+/// Pass to apply tiling and vectorization transformations on linagl::MatMulOp.
+std::unique_ptr<FunctionPass> createMatMulTileAndVectorizeGPUPass();
+
 /// Populates passes needed to lower a XLA HLO op to SPIR-V dialect via the
 /// structured ops path. The pass manager `pm` in here operate on the module
 /// within the IREE::HAL::ExecutableOp. The `workGroupSize` can be used to
@@ -61,7 +72,7 @@ std::unique_ptr<OperationPass<FuncOp>> createVectorToGPUPass();
 /// testing purposes only. The pass pipeline will set an appropriate workgroup
 /// size.
 void buildSPIRVTransformPassPipeline(OpPassManager &pm,
-                                     ArrayRef<int64_t> workGroupSize);
+                                     const SPIRVCodegenOptions &options);
 
 /// Poplate passes needed to lower loop.parallel to workgroups.
 void populateParallelLoopToWorkgroupPatterns(

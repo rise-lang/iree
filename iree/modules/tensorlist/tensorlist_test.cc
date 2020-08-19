@@ -25,11 +25,10 @@
 #include "iree/modules/tensorlist/native_module.h"
 #include "iree/modules/tensorlist/tensorlist_test_module.h"
 #include "iree/testing/gtest.h"
+#include "iree/testing/status_matchers.h"
 #include "iree/vm/api.h"
 #include "iree/vm/bytecode_module.h"
-#include "iree/vm/ref.h"
 #include "iree/vm/ref_cc.h"
-#include "iree/vm/variant_list.h"
 
 namespace iree {
 
@@ -38,23 +37,23 @@ namespace {
 class TensorListModulesTest : public ::testing::Test {
  protected:
   virtual void SetUp() {
-    IREE_CHECK_OK(iree_vm_instance_create(IREE_ALLOCATOR_SYSTEM, &instance_));
+    IREE_CHECK_OK(iree_vm_instance_create(iree_allocator_system(), &instance_));
 
     // TODO(benvanik): move to instance-based registration.
     IREE_CHECK_OK(iree_hal_module_register_types());
     // TODO(benvanik): make a 'don't care' helper method.
     iree_hal_driver_t* hal_driver = nullptr;
     IREE_CHECK_OK(iree_hal_driver_registry_create_driver(
-        iree_make_cstring_view("vmla"), IREE_ALLOCATOR_SYSTEM, &hal_driver));
+        iree_make_cstring_view("vmla"), iree_allocator_system(), &hal_driver));
     IREE_CHECK_OK(iree_hal_driver_create_default_device(
-        hal_driver, IREE_ALLOCATOR_SYSTEM, &device_));
+        hal_driver, iree_allocator_system(), &device_));
     IREE_CHECK_OK(
-        iree_hal_module_create(device_, IREE_ALLOCATOR_SYSTEM, &hal_module_));
+        iree_hal_module_create(device_, iree_allocator_system(), &hal_module_));
     iree_hal_driver_release(hal_driver);
 
     IREE_CHECK_OK(iree_tensorlist_module_register_types());
     IREE_CHECK_OK(
-        iree_tensorlist_module_create(IREE_ALLOCATOR_SYSTEM, &native_module_))
+        iree_tensorlist_module_create(iree_allocator_system(), &native_module_))
         << "Native module failed to init";
 
     const auto* module_file_toc =
@@ -63,13 +62,13 @@ class TensorListModulesTest : public ::testing::Test {
         iree_const_byte_span_t{
             reinterpret_cast<const uint8_t*>(module_file_toc->data),
             module_file_toc->size},
-        IREE_ALLOCATOR_NULL, IREE_ALLOCATOR_SYSTEM, &bytecode_module_))
+        iree_allocator_null(), iree_allocator_system(), &bytecode_module_))
         << "Bytecode module failed to load";
 
     std::vector<iree_vm_module_t*> modules = {hal_module_, native_module_,
                                               bytecode_module_};
     IREE_CHECK_OK(iree_vm_context_create_with_modules(
-        instance_, modules.data(), modules.size(), IREE_ALLOCATOR_SYSTEM,
+        instance_, modules.data(), modules.size(), iree_allocator_system(),
         &context_));
   }
 
@@ -124,7 +123,7 @@ void CreateBufferView(absl::Span<float> contents,
   IREE_ASSERT_OK(iree_hal_buffer_unmap(buffer.get(), &mapped_memory));
   IREE_ASSERT_OK(iree_hal_buffer_view_create(
       buffer.get(), shape.data(), shape.size(), IREE_HAL_ELEMENT_TYPE_FLOAT_32,
-      IREE_ALLOCATOR_SYSTEM, &*out_buffer_view));
+      iree_allocator_system(), &*out_buffer_view));
 }
 
 TEST_F(TensorListModulesTest, IdentityThroughSetItemGetItem) {
@@ -135,26 +134,28 @@ TEST_F(TensorListModulesTest, IdentityThroughSetItemGetItem) {
   CreateBufferView(kBufferContents, shape, device_, &input_buffer_view);
 
   // Pass in the tensor as a HAL buffer view.
-  iree_vm_variant_list_t* inputs = nullptr;
-  IREE_ASSERT_OK(iree_vm_variant_list_alloc(1, IREE_ALLOCATOR_SYSTEM, &inputs));
+  vm::ref<iree_vm_list_t> inputs;
+  IREE_ASSERT_OK(iree_vm_list_create(/*element_type=*/nullptr, 1,
+                                     iree_allocator_system(), &inputs));
   iree_vm_ref_t input_buffer_view_ref =
       iree_hal_buffer_view_move_ref(input_buffer_view.get());
   IREE_ASSERT_OK(
-      iree_vm_variant_list_append_ref_retain(inputs, &input_buffer_view_ref));
+      iree_vm_list_push_ref_retain(inputs.get(), &input_buffer_view_ref));
 
   // Prepare outputs list to accept the results from the invocation.
-  iree_vm_variant_list_t* outputs = nullptr;
-  IREE_ASSERT_OK(
-      iree_vm_variant_list_alloc(1, IREE_ALLOCATOR_SYSTEM, &outputs));
+  vm::ref<iree_vm_list_t> outputs;
+  IREE_ASSERT_OK(iree_vm_list_create(/*element_type=*/nullptr, 1,
+                                     iree_allocator_system(), &outputs));
 
   // Synchronously invoke the function.
   IREE_ASSERT_OK(iree_vm_invoke(
       context_, LookupFunction("identity_through_set_item_get_item"),
-      /*policy=*/nullptr, inputs, outputs, IREE_ALLOCATOR_SYSTEM));
-  iree_vm_variant_list_free(inputs);
+      /*policy=*/nullptr, inputs.get(), outputs.get(),
+      iree_allocator_system()));
 
-  iree_hal_buffer_view_t* returned_buffer_view =
-      iree_hal_buffer_view_deref(&iree_vm_variant_list_get(outputs, 0)->ref);
+  auto* returned_buffer_view =
+      reinterpret_cast<iree_hal_buffer_view_t*>(iree_vm_list_get_ref_deref(
+          outputs.get(), 0, iree_hal_buffer_view_get_descriptor()));
   ASSERT_NE(nullptr, returned_buffer_view);
   iree_hal_buffer_t* returned_buffer =
       iree_hal_buffer_view_buffer(returned_buffer_view);
@@ -167,8 +168,6 @@ TEST_F(TensorListModulesTest, IdentityThroughSetItemGetItem) {
   EXPECT_EQ(reinterpret_cast<float*>(mapped_memory.contents.data)[0],
             kBufferContents[0]);
   IREE_ASSERT_OK(iree_hal_buffer_unmap(returned_buffer, &mapped_memory));
-
-  iree_vm_variant_list_free(outputs);
 }
 
 TEST_F(TensorListModulesTest, IdentityThroughConcat) {
@@ -179,26 +178,28 @@ TEST_F(TensorListModulesTest, IdentityThroughConcat) {
   CreateBufferView(kBufferContents, shape, device_, &input_buffer_view);
 
   // Pass in the tensor as a HAL buffer view.
-  iree_vm_variant_list_t* inputs = nullptr;
-  IREE_ASSERT_OK(iree_vm_variant_list_alloc(1, IREE_ALLOCATOR_SYSTEM, &inputs));
+  vm::ref<iree_vm_list_t> inputs;
+  IREE_ASSERT_OK(iree_vm_list_create(/*element_type=*/nullptr, 1,
+                                     iree_allocator_system(), &inputs));
   iree_vm_ref_t input_buffer_view_ref =
       iree_hal_buffer_view_move_ref(input_buffer_view.get());
   IREE_ASSERT_OK(
-      iree_vm_variant_list_append_ref_retain(inputs, &input_buffer_view_ref));
+      iree_vm_list_push_ref_retain(inputs.get(), &input_buffer_view_ref));
 
   // Prepare outputs list to accept the results from the invocation.
-  iree_vm_variant_list_t* outputs = nullptr;
-  IREE_ASSERT_OK(
-      iree_vm_variant_list_alloc(1, IREE_ALLOCATOR_SYSTEM, &outputs));
+  vm::ref<iree_vm_list_t> outputs;
+  IREE_ASSERT_OK(iree_vm_list_create(/*element_type=*/nullptr, 1,
+                                     iree_allocator_system(), &outputs));
 
   // Synchronously invoke the function.
-  IREE_ASSERT_OK(iree_vm_invoke(
-      context_, LookupFunction("identity_through_concat"),
-      /*policy=*/nullptr, inputs, outputs, IREE_ALLOCATOR_SYSTEM));
-  iree_vm_variant_list_free(inputs);
+  IREE_ASSERT_OK(iree_vm_invoke(context_,
+                                LookupFunction("identity_through_concat"),
+                                /*policy=*/nullptr, inputs.get(), outputs.get(),
+                                iree_allocator_system()));
 
-  iree_hal_buffer_view_t* returned_buffer_view =
-      iree_hal_buffer_view_deref(&iree_vm_variant_list_get(outputs, 0)->ref);
+  auto* returned_buffer_view =
+      reinterpret_cast<iree_hal_buffer_view_t*>(iree_vm_list_get_ref_deref(
+          outputs.get(), 0, iree_hal_buffer_view_get_descriptor()));
   ASSERT_NE(nullptr, returned_buffer_view);
   iree_hal_buffer_t* returned_buffer =
       iree_hal_buffer_view_buffer(returned_buffer_view);
@@ -222,8 +223,6 @@ TEST_F(TensorListModulesTest, IdentityThroughConcat) {
                         mapped_memory.contents.data_length),
             0);
   IREE_ASSERT_OK(iree_hal_buffer_unmap(returned_buffer, &mapped_memory));
-
-  iree_vm_variant_list_free(outputs);
 }
 
 TEST_F(TensorListModulesTest, IdentityThroughStack) {
@@ -234,26 +233,28 @@ TEST_F(TensorListModulesTest, IdentityThroughStack) {
   CreateBufferView(kBufferContents, shape, device_, &input_buffer_view);
 
   // Pass in the tensor as a HAL buffer view.
-  iree_vm_variant_list_t* inputs = nullptr;
-  IREE_ASSERT_OK(iree_vm_variant_list_alloc(1, IREE_ALLOCATOR_SYSTEM, &inputs));
+  vm::ref<iree_vm_list_t> inputs;
+  IREE_ASSERT_OK(iree_vm_list_create(/*element_type=*/nullptr, 1,
+                                     iree_allocator_system(), &inputs));
   iree_vm_ref_t input_buffer_view_ref =
       iree_hal_buffer_view_move_ref(input_buffer_view.get());
   IREE_ASSERT_OK(
-      iree_vm_variant_list_append_ref_retain(inputs, &input_buffer_view_ref));
+      iree_vm_list_push_ref_retain(inputs.get(), &input_buffer_view_ref));
 
   // Prepare outputs list to accept the results from the invocation.
-  iree_vm_variant_list_t* outputs = nullptr;
-  IREE_ASSERT_OK(
-      iree_vm_variant_list_alloc(1, IREE_ALLOCATOR_SYSTEM, &outputs));
+  vm::ref<iree_vm_list_t> outputs;
+  IREE_ASSERT_OK(iree_vm_list_create(/*element_type=*/nullptr, 1,
+                                     iree_allocator_system(), &outputs));
 
   // Synchronously invoke the function.
-  IREE_ASSERT_OK(iree_vm_invoke(
-      context_, LookupFunction("identity_through_stack"),
-      /*policy=*/nullptr, inputs, outputs, IREE_ALLOCATOR_SYSTEM));
-  iree_vm_variant_list_free(inputs);
+  IREE_ASSERT_OK(iree_vm_invoke(context_,
+                                LookupFunction("identity_through_stack"),
+                                /*policy=*/nullptr, inputs.get(), outputs.get(),
+                                iree_allocator_system()));
 
-  iree_hal_buffer_view_t* returned_buffer_view =
-      iree_hal_buffer_view_deref(&iree_vm_variant_list_get(outputs, 0)->ref);
+  auto* returned_buffer_view =
+      reinterpret_cast<iree_hal_buffer_view_t*>(iree_vm_list_get_ref_deref(
+          outputs.get(), 0, iree_hal_buffer_view_get_descriptor()));
   ASSERT_NE(nullptr, returned_buffer_view);
   iree_hal_buffer_t* returned_buffer =
       iree_hal_buffer_view_buffer(returned_buffer_view);
@@ -268,8 +269,6 @@ TEST_F(TensorListModulesTest, IdentityThroughStack) {
                         mapped_memory.contents.data_length),
             0);
   IREE_ASSERT_OK(iree_hal_buffer_unmap(returned_buffer, &mapped_memory));
-
-  iree_vm_variant_list_free(outputs);
 }
 
 }  // namespace

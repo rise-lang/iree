@@ -14,16 +14,15 @@
 
 iree_add_all_subdirs()
 
-flatbuffer_cc_library(
+flatbuffer_c_library(
   NAME
-    buffer_data_def_cc_fbs
+    bytecode_module_def_c_fbs
   SRCS
-    "buffer_data_def.fbs"
-  FLATC_ARGS
-    "--keep-prefix"
-    "--scoped-enums"
-    "--reflect-names"
-    "--gen-object-api"
+    "bytecode_module_def.fbs"
+  FLATCC_ARGS
+    "--reader"
+    "--builder"
+    "--verifier"
   PUBLIC
 )
 
@@ -45,19 +44,6 @@ flatbuffer_cc_library(
     dylib_executable_def_cc_fbs
   SRCS
     "dylib_executable_def.fbs"
-  FLATC_ARGS
-    "--keep-prefix"
-    "--scoped-enums"
-    "--reflect-names"
-    "--gen-object-api"
-  PUBLIC
-)
-
-flatbuffer_cc_library(
-  NAME
-    interpreter_module_def_cc_fbs
-  SRCS
-    "interpreter_module_def.fbs"
   FLATC_ARGS
     "--keep-prefix"
     "--scoped-enums"

@@ -42,7 +42,13 @@ fi
 declare -a test_env_args=(
   --test_env=IREE_LLVMJIT_DISABLE=$IREE_LLVMJIT_DISABLE
   --test_env=IREE_VULKAN_DISABLE=$IREE_VULKAN_DISABLE
+  --action_env=IREE_LLVMAOT_LINKER_PATH=$IREE_LLVMAOT_LINKER_PATH
 )
+# Pass in VK_ICD_FILENAMES if exists so that the Vulkan loader can find the
+# Vulkan implementation.
+if  [[ -v VK_ICD_FILENAMES ]]; then
+  test_env_args+=(--test_env=VK_ICD_FILENAMES=$VK_ICD_FILENAMES)
+fi
 
 declare -a default_build_tag_filters=("-nokokoro")
 declare -a default_test_tag_filters=("-nokokoro")
@@ -72,13 +78,21 @@ fi
 # `bazel test //...` because the latter excludes targets tagged "manual". The
 # "manual" tag allows targets to be excluded from human wildcard builds, but we
 # want them built by CI unless they are excluded with "nokokoro".
-bazel query //integrations/... + //colab/... + //packaging/... | \
-  xargs bazel test ${test_env_args[@]} \
-    --config=generic_clang \
-    --build_tag_filters="${BUILD_TAG_FILTERS?}" \
-    --test_tag_filters="${TEST_TAG_FILTERS?}" \
-    --test_output=errors \
-    --keep_going
-    # TODO: Enable result store once the Kokoro VMs used for this test have the
-    # appropriate auth.
-    # --config=rs
+# Explicitly list bazelrc so that builds are reproducible and get cache hits
+# when this script is invoked locally.
+bazel \
+  --nosystem_rc --nohome_rc --noworkspace_rc \
+  --bazelrc=build_tools/bazel/iree.bazelrc \
+  query \
+    //integrations/... + //colab/... + //packaging/... | \
+      xargs bazel \
+        --nosystem_rc --nohome_rc --noworkspace_rc \
+        --bazelrc=build_tools/bazel/iree.bazelrc \
+          test \
+          ${test_env_args[@]} \
+        --config=generic_clang \
+        --build_tag_filters="${BUILD_TAG_FILTERS?}" \
+        --test_tag_filters="${TEST_TAG_FILTERS?}" \
+        --config=rs \
+        --test_output=errors \
+        --keep_going

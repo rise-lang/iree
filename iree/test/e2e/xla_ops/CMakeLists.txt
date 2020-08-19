@@ -46,7 +46,11 @@ iree_check_single_backend_test_suite(
     "divide.mlir"
     "dot.mlir"
     "exponential.mlir"
+    "gather.mlir"
+    "gather_concat.mlir"
+    "iota.mlir"
     "log.mlir"
+    "log_plus_one.mlir"
     "maximum.mlir"
     "minimum.mlir"
     "multiply.mlir"
@@ -66,6 +70,7 @@ iree_check_single_backend_test_suite(
     "tanh.mlir"
     "torch_index_select.mlir"
     "transpose.mlir"
+    "while.mlir"
   TARGET_BACKEND
     vulkan-spirv
   DRIVER
@@ -91,7 +96,11 @@ iree_check_single_backend_test_suite(
     "divide.mlir"
     "dot.mlir"
     "exponential.mlir"
+    "gather.mlir"
+    "gather_concat.mlir"
+    "iota.mlir"
     "log.mlir"
+    "log_plus_one.mlir"
     "maximum.mlir"
     "minimum.mlir"
     "multiply.mlir"

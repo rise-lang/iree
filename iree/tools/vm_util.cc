@@ -17,21 +17,16 @@
 #include <ostream>
 
 #include "absl/strings/numbers.h"
+#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/strip.h"
 #include "absl/types/span.h"
-#include "iree/base/api_util.h"
-#include "iree/base/buffer_string_util.h"
-#include "iree/base/shape.h"
-#include "iree/base/shaped_buffer.h"
-#include "iree/base/shaped_buffer_string_util.h"
+#include "iree/base/file_io.h"
 #include "iree/base/signature_mangle.h"
 #include "iree/base/status.h"
 #include "iree/hal/api.h"
 #include "iree/modules/hal/hal_module.h"
 #include "iree/vm/bytecode_module.h"
-#include "iree/vm/module.h"
-#include "iree/vm/variant_list.h"
 
 namespace iree {
 
@@ -84,26 +79,23 @@ StatusOr<std::vector<RawSignatureParser::Description>> ParseOutputSignature(
   return output_descs;
 }
 
-StatusOr<iree_vm_variant_list_t*> ParseToVariantList(
+StatusOr<vm::ref<iree_vm_list_t>> ParseToVariantList(
     absl::Span<const RawSignatureParser::Description> descs,
     iree_hal_allocator_t* allocator,
-    absl::Span<const std::string> input_strings) {
+    absl::Span<const absl::string_view> input_strings) {
   if (input_strings.size() != descs.size()) {
     return InvalidArgumentErrorBuilder(IREE_LOC)
            << "Signature mismatch; expected " << descs.size()
            << " buffer strings but received " << input_strings.size();
   }
-  iree_vm_variant_list_t* variant_list = nullptr;
-  RETURN_IF_ERROR(FromApiStatus(
-      iree_vm_variant_list_alloc(input_strings.size(), IREE_ALLOCATOR_SYSTEM,
-                                 &variant_list),
-      IREE_LOC));
-  for (int i = 0; i < input_strings.size(); ++i) {
+  vm::ref<iree_vm_list_t> variant_list;
+  IREE_RETURN_IF_ERROR(
+      iree_vm_list_create(/*element_type=*/nullptr, input_strings.size(),
+                          iree_allocator_system(), &variant_list));
+  for (size_t i = 0; i < input_strings.size(); ++i) {
     auto input_string = input_strings[i];
     auto desc = descs[i];
     std::string desc_str;
-    // TODO(laurenzo): Parse real element type once bindings code enforces it.
-    iree_hal_element_type_t hal_element_type = IREE_HAL_ELEMENT_TYPE_NONE;
     desc.ToString(desc_str);
     switch (desc.type) {
       case RawSignatureParser::Type::kScalar: {
@@ -119,66 +111,24 @@ StatusOr<iree_vm_variant_list_t*> ParseToVariantList(
                  << "Parsing '" << input_string
                  << "'. Has i32 descriptor but does not start with 'i32='";
         }
-        int32_t val;
-        if (!absl::SimpleAtoi(input_view, &val)) {
+        iree_vm_value_t val = iree_vm_value_make_i32(0);
+        if (!absl::SimpleAtoi(input_view, &val.i32)) {
           return InvalidArgumentErrorBuilder(IREE_LOC)
                  << "Converting '" << input_view << "' to i32 when parsing '"
                  << input_string << "'";
         }
-        iree_vm_variant_list_append_value(variant_list,
-                                          iree_vm_value_make_i32(val));
+        IREE_RETURN_IF_ERROR(iree_vm_list_push_value(variant_list.get(), &val));
         break;
       }
       case RawSignatureParser::Type::kBuffer: {
-        ASSIGN_OR_RETURN(auto shaped_buffer,
-                         ParseShapedBufferFromString(input_string),
-                         _ << "Parsing value '" << input_string << "'");
-        // Allocate the buffer.
-        iree_hal_buffer_t* buf = nullptr;
-        // TODO(benvanik): combined function for linear to optimal upload.
-        iree_device_size_t allocation_size =
-            shaped_buffer.shape().element_count() *
-            shaped_buffer.element_size();
-        RETURN_IF_ERROR(FromApiStatus(
-            iree_hal_allocator_allocate_buffer(
-                allocator,
-                static_cast<iree_hal_memory_type_t>(
-                    IREE_HAL_MEMORY_TYPE_HOST_LOCAL |
-                    IREE_HAL_MEMORY_TYPE_DEVICE_VISIBLE),
-                static_cast<iree_hal_buffer_usage_t>(
-                    IREE_HAL_BUFFER_USAGE_ALL | IREE_HAL_BUFFER_USAGE_CONSTANT),
-                allocation_size, &buf),
-            IREE_LOC))
-            << "Allocating buffer";
-        RETURN_IF_ERROR(FromApiStatus(
-            iree_hal_buffer_write_data(buf, 0, shaped_buffer.contents().data(),
-                                       shaped_buffer.contents().size()),
-            IREE_LOC))
-            << "Populating buffer contents ";
-
-        absl::InlinedVector<iree_hal_dim_t, 5> dims(
-            shaped_buffer.shape().size());
-        // TODO(laurenzo): The following should work but Shape iterators
-        // cause access violations.
-        // std::copy(shaped_buffer.shape().begin(), shaped_buffer.shape().end(),
-        //           dims.begin());
-        for (size_t i = 0; i < dims.size(); ++i) {
-          dims[i] = shaped_buffer.shape()[i];
-        }
-
-        // Wrap in buffer view.
         iree_hal_buffer_view_t* buffer_view = nullptr;
-        RETURN_IF_ERROR(FromApiStatus(
-            iree_hal_buffer_view_create(buf, dims.data(), dims.size(),
-                                        hal_element_type, IREE_ALLOCATOR_SYSTEM,
-                                        &buffer_view),
-            IREE_LOC))
-            << "Creating buffer view";
-        iree_hal_buffer_release(buf);
+        IREE_RETURN_IF_ERROR(iree_hal_buffer_view_parse(
+            iree_string_view_t{input_string.data(), input_string.size()},
+            allocator, iree_allocator_system(), &buffer_view))
+            << "Parsing value '" << input_string << "'";
         auto buffer_view_ref = iree_hal_buffer_view_move_ref(buffer_view);
-        RETURN_IF_ERROR(FromApiStatus(iree_vm_variant_list_append_ref_move(
-                                          variant_list, &buffer_view_ref),
-                                      IREE_LOC));
+        IREE_RETURN_IF_ERROR(
+            iree_vm_list_push_ref_move(variant_list.get(), &buffer_view_ref));
         break;
       }
       default:
@@ -186,18 +136,35 @@ StatusOr<iree_vm_variant_list_t*> ParseToVariantList(
                << "Unsupported signature type: " << desc_str;
     }
   }
-  return variant_list;
+  return variant_list.release();
+}
+
+StatusOr<vm::ref<iree_vm_list_t>> ParseToVariantList(
+    absl::Span<const RawSignatureParser::Description> descs,
+    iree_hal_allocator_t* allocator,
+    absl::Span<const std::string> input_strings) {
+  absl::InlinedVector<absl::string_view, 4> input_views(input_strings.size());
+  for (int i = 0; i < input_strings.size(); ++i) {
+    input_views[i] = input_strings[i];
+  }
+  return ParseToVariantList(descs, allocator, input_views);
+}
+
+StatusOr<vm::ref<iree_vm_list_t>> ParseToVariantListFromFile(
+    absl::Span<const RawSignatureParser::Description> descs,
+    iree_hal_allocator_t* allocator, const std::string& filename) {
+  IREE_ASSIGN_OR_RETURN(auto file_string, file_io::GetFileContents(filename));
+  absl::InlinedVector<absl::string_view, 4> input_views(
+      absl::StrSplit(file_string, '\n', absl::SkipEmpty()));
+  return ParseToVariantList(descs, allocator, input_views);
 }
 
 Status PrintVariantList(absl::Span<const RawSignatureParser::Description> descs,
-                        iree_vm_variant_list_t* variant_list,
-                        std::ostream* os) {
-  for (int i = 0; i < iree_vm_variant_list_size(variant_list); ++i) {
-    iree_vm_variant_t* variant = iree_vm_variant_list_get(variant_list, i);
-    if (!variant) {
-      return InvalidArgumentErrorBuilder(IREE_LOC)
-             << "variant " << i << "not present";
-    }
+                        iree_vm_list_t* variant_list, std::ostream* os) {
+  for (int i = 0; i < iree_vm_list_size(variant_list); ++i) {
+    iree_vm_variant_t variant = iree_vm_variant_empty();
+    IREE_RETURN_IF_ERROR(iree_vm_list_get_variant(variant_list, i, &variant))
+        << "variant " << i << "not present";
 
     const auto& desc = descs[i];
     std::string desc_str;
@@ -206,88 +173,43 @@ Status PrintVariantList(absl::Span<const RawSignatureParser::Description> descs,
 
     switch (desc.type) {
       case RawSignatureParser::Type::kScalar: {
-        if (variant->value_type != IREE_VM_VALUE_TYPE_I32) {
+        if (variant.type.value_type != IREE_VM_VALUE_TYPE_I32) {
           return InvalidArgumentErrorBuilder(IREE_LOC)
                  << "variant " << i << " has value type "
-                 << static_cast<int>(variant->value_type)
+                 << static_cast<int>(variant.type.value_type)
                  << " but descriptor information " << desc_str;
         }
         if (desc.scalar.type != AbiConstants::ScalarType::kSint32) {
           return UnimplementedErrorBuilder(IREE_LOC)
                  << "Unsupported signature scalar type: " << desc_str;
         }
-        *os << "i32=" << variant->i32 << "\n";
+        *os << "i32=" << variant.i32 << "\n";
         break;
       }
       case RawSignatureParser::Type::kBuffer: {
-        if (variant->value_type != IREE_VM_VALUE_TYPE_NONE) {
+        if (!iree_vm_type_def_is_ref(&variant.type)) {
           return InvalidArgumentErrorBuilder(IREE_LOC)
                  << "variant " << i << " has value type "
-                 << static_cast<int>(variant->value_type)
+                 << static_cast<int>(variant.type.value_type)
                  << " but descriptor information " << desc_str;
         }
-        auto* buffer_view = iree_hal_buffer_view_deref(&variant->ref);
+        auto* buffer_view = iree_hal_buffer_view_deref(&variant.ref);
         if (!buffer_view) {
           return InvalidArgumentErrorBuilder(IREE_LOC)
                  << "failed dereferencing variant " << i;
         }
-        auto* buffer = iree_hal_buffer_view_buffer(buffer_view);
-        if (!buffer) {
-          return InvalidArgumentErrorBuilder(IREE_LOC)
-                 << "failed to get buffer for variant " << i;
-        }
 
-        auto print_mode = BufferDataPrintMode::kFloatingPoint;
-        int8_t element_size = 4;
+        std::string result_str(4096, '\0');
+        iree_status_t status;
+        do {
+          iree_host_size_t actual_length = 0;
+          status = iree_hal_buffer_view_format(
+              buffer_view, /*max_element_count=*/1024, result_str.size() + 1,
+              &result_str[0], &actual_length);
+          result_str.resize(actual_length);
+        } while (iree_status_is_out_of_range(status));
+        IREE_RETURN_IF_ERROR(status);
 
-        // Copy the dims out of the buffer view.
-        absl::InlinedVector<iree_hal_dim_t, 5> dims32(
-            iree_hal_buffer_view_shape_rank(buffer_view));
-        iree_hal_buffer_view_shape(buffer_view, dims32.size(), dims32.data(),
-                                   nullptr);
-        absl::InlinedVector<int, 5> dims(dims32.size());
-        std::copy(dims32.begin(), dims32.end(), dims.begin());
-        Shape shape{dims};
-
-        switch (desc.buffer.scalar_type) {
-          case AbiConstants::ScalarType::kIeeeFloat16:
-          case AbiConstants::ScalarType::kIeeeFloat32:
-          case AbiConstants::ScalarType::kIeeeFloat64:
-            print_mode = BufferDataPrintMode::kFloatingPoint;
-            break;
-          case AbiConstants::ScalarType::kSint8:
-          case AbiConstants::ScalarType::kSint16:
-          case AbiConstants::ScalarType::kSint32:
-          case AbiConstants::ScalarType::kSint64:
-            print_mode = BufferDataPrintMode::kSignedInteger;
-            break;
-          case AbiConstants::ScalarType::kUint8:
-          case AbiConstants::ScalarType::kUint16:
-          case AbiConstants::ScalarType::kUint32:
-          case AbiConstants::ScalarType::kUint64:
-            print_mode = BufferDataPrintMode::kUnsignedInteger;
-            break;
-          default:
-            print_mode = BufferDataPrintMode::kBinary;
-            break;
-        }
-        element_size = AbiConstants::kScalarTypeSize[static_cast<unsigned>(
-            desc.buffer.scalar_type)];
-
-        iree_hal_mapped_memory_t mapped_memory;
-        RETURN_IF_ERROR(FromApiStatus(
-            iree_hal_buffer_map(buffer, IREE_HAL_MEMORY_ACCESS_READ, 0,
-                                IREE_WHOLE_BUFFER, &mapped_memory),
-            IREE_LOC))
-            << "mapping hal buffer";
-        auto contents = absl::MakeConstSpan(mapped_memory.contents.data,
-                                            mapped_memory.contents.data_length);
-        ShapedBuffer shaped_buffer(
-            element_size, shape,
-            std::vector<uint8_t>(contents.begin(), contents.end()));
-        ASSIGN_OR_RETURN(auto result_str, PrintShapedBufferToString(
-                                              shaped_buffer, print_mode, 1024));
-        iree_hal_buffer_unmap(buffer, &mapped_memory);
         *os << result_str << "\n";
         break;
       }
@@ -304,15 +226,12 @@ Status CreateDevice(absl::string_view driver_name,
                     iree_hal_device_t** out_device) {
   LOG(INFO) << "Creating driver and device for '" << driver_name << "'...";
   iree_hal_driver_t* driver = nullptr;
-  RETURN_IF_ERROR(FromApiStatus(
-      iree_hal_driver_registry_create_driver(
-          iree_string_view_t{driver_name.data(), driver_name.size()},
-          IREE_ALLOCATOR_SYSTEM, &driver),
-      IREE_LOC))
+  IREE_RETURN_IF_ERROR(iree_hal_driver_registry_create_driver(
+      iree_string_view_t{driver_name.data(), driver_name.size()},
+      iree_allocator_system(), &driver))
       << "Creating driver '" << driver_name << "'";
-  RETURN_IF_ERROR(FromApiStatus(iree_hal_driver_create_default_device(
-                                    driver, IREE_ALLOCATOR_SYSTEM, out_device),
-                                IREE_LOC))
+  IREE_RETURN_IF_ERROR(iree_hal_driver_create_default_device(
+      driver, iree_allocator_system(), out_device))
       << "Creating default device for driver '" << driver_name << "'";
   iree_hal_driver_release(driver);
   return OkStatus();
@@ -320,22 +239,19 @@ Status CreateDevice(absl::string_view driver_name,
 
 Status CreateHalModule(iree_hal_device_t* device,
                        iree_vm_module_t** out_module) {
-  RETURN_IF_ERROR(FromApiStatus(
-      iree_hal_module_create(device, IREE_ALLOCATOR_SYSTEM, out_module),
-      IREE_LOC))
+  IREE_RETURN_IF_ERROR(
+      iree_hal_module_create(device, iree_allocator_system(), out_module))
       << "Creating HAL module";
   return OkStatus();
 }
 
 Status LoadBytecodeModule(absl::string_view module_data,
                           iree_vm_module_t** out_module) {
-  RETURN_IF_ERROR(FromApiStatus(
-      iree_vm_bytecode_module_create(
-          iree_const_byte_span_t{
-              reinterpret_cast<const uint8_t*>(module_data.data()),
-              module_data.size()},
-          IREE_ALLOCATOR_NULL, IREE_ALLOCATOR_SYSTEM, out_module),
-      IREE_LOC))
+  IREE_RETURN_IF_ERROR(iree_vm_bytecode_module_create(
+      iree_const_byte_span_t{
+          reinterpret_cast<const uint8_t*>(module_data.data()),
+          module_data.size()},
+      iree_allocator_null(), iree_allocator_system(), out_module))
       << "Deserializing module";
   return OkStatus();
 }

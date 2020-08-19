@@ -64,9 +64,6 @@ def _create_default_iree_driver(
       continue
     try:
       driver = _binding.HalDriver.create(driver_name)
-      print(
-          "Created IREE driver %s: %r" % (driver_name, driver), file=sys.stderr)
-      return driver
       # TODO(laurenzo): Remove these prints to stderr (for now, more information
       # is better and there is no better way to report it yet).
     except Exception as ex:  # pylint: disable=broad-except
@@ -74,6 +71,23 @@ def _create_default_iree_driver(
           "Could not create default driver %s: %r" % (driver_name, ex),
           file=sys.stderr)
       driver_exceptions[driver_name] = ex
+      continue
+
+    # Sanity check creation of the default device and skip the driver if
+    # this fails (this works around issues where the driver is present
+    # but there are no devices). This default initialization scheme needs
+    # to be improved.
+    try:
+      device = driver.create_default_device()
+    except Exception as ex:
+      print(
+          "Could not create default driver device %s: %r" % (driver_name, ex),
+          file=sys.stderr)
+      driver_exceptions[driver_name] = ex
+      continue
+
+    print("Created IREE driver %s: %r" % (driver_name, driver), file=sys.stderr)
+    return driver
 
   # All failed.
   raise RuntimeError("Could not create any requested driver "
@@ -124,7 +138,7 @@ class BoundFunction:
   def __call__(self, *args):
     # NOTE: This is just doing sync dispatch right now. In the future,
     # this should default to async and potentially have some kind of policy
-    # flag that can allow it to be overriden.
+    # flag that can allow it to be overridden.
     inputs = self._abi.raw_pack_inputs(args)
     results = self._abi.allocate_results(inputs, static_alloc=False)
     self._context._vm_context.invoke(self._vm_function, inputs, results)
@@ -255,8 +269,7 @@ class SystemContext:
 def load_modules(*modules, config: Optional[Config] = None):
   """Loads modules into a new or shared context and returns them."""
   context = SystemContext(modules=modules, config=config)
-  context_modules = context.modules
-  bound_modules = [context_modules[m.name] for m in modules]
+  bound_modules = [context.modules[m.name] for m in modules]
   return bound_modules
 
 

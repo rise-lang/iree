@@ -18,6 +18,7 @@
 #include "iree/compiler/Dialect/HAL/Target/LLVM/LLVMIRPasses.h"
 #include "iree/compiler/Dialect/HAL/Target/TargetRegistry.h"
 #include "iree/schemas/llvmir_executable_def_generated.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/TargetSelect.h"
@@ -43,28 +44,26 @@ class LLVMIRTargetBackend final : public TargetBackend {
 
   LogicalResult serializeExecutable(IREE::HAL::ExecutableTargetOp targetOp,
                                     OpBuilder& executableBuilder) override {
-    // LLVM is not thread safe and currently translation shares an LLVMContext.
-    // Since we serialize executables from multiple threads we have to take a
-    // global lock here.
-    static llvm::sys::SmartMutex<true> mutex;
-    llvm::sys::SmartScopedLock<true> lock(mutex);
+    // Perform the translation to LLVM in a separate context to avoid
+    // multi-threading issues.
+    llvm::LLVMContext context;
 
     // At this moment we are leaving MLIR LLVM dialect land translating module
     // into target independent LLVMIR.
-    auto llvmModule = mlir::translateModuleToLLVMIR(targetOp.getInnerModule());
+    auto llvmModule =
+        mlir::translateModuleToLLVMIR(targetOp.getInnerModule(), context);
+    if (!llvmModule) {
+      return targetOp.emitError("Failed to translate executable to LLVM IR");
+    }
 
     // Create invocation function an populate entry_points.
     iree::LLVMIRExecutableDefT llvmIrExecutableDef;
     auto executableOp = cast<IREE::HAL::ExecutableOp>(targetOp.getParentOp());
     auto entryPointOps =
         executableOp.getBlock().getOps<IREE::HAL::ExecutableEntryPointOp>();
-    const bool addCInterface = true;
     for (auto entryPointOp : entryPointOps) {
-      std::string funcName =
-          addCInterface ? "_mlir_ciface_" + std::string(entryPointOp.sym_name())
-                        : std::string(entryPointOp.sym_name());
-      llvmIrExecutableDef.entry_points.push_back(funcName);
-      createLLVMInvocationFunc(funcName, llvmModule.get());
+      llvmIrExecutableDef.entry_points.push_back(
+          std::string(entryPointOp.sym_name()));
     }
 
     // LLVMIR opt passes.
@@ -74,8 +73,9 @@ class LLVMIRTargetBackend final : public TargetBackend {
                          options_.targetTriple);
       return failure();
     }
-    if (failed(
-            runLLVMIRPasses(options_, targetMachine.get(), llvmModule.get()))) {
+    LogicalResult translationResult =
+        runLLVMIRPasses(options_, targetMachine.get(), llvmModule.get());
+    if (failed(translationResult)) {
       return targetOp.emitError(
           "Can't build LLVMIR opt passes for ExecutableOp module");
     }

@@ -27,21 +27,20 @@ cc_library(
     name = "alignment",
     hdrs = ["alignment.h"],
     deps = [
-        ":platform_headers",
         ":target_platform",
     ],
 )
 
 cc_library(
     name = "api",
-    srcs = ["api.cc"],
+    srcs = [
+        "api.c",
+    ],
     hdrs = ["api.h"],
     visibility = ["//visibility:public"],
     deps = [
         ":api_hdrs",
-        ":api_util",
-        ":file_mapping",
-        ":init",
+        ":target_platform",
         ":tracing",
     ],
 )
@@ -49,19 +48,6 @@ cc_library(
 cc_library(
     name = "api_hdrs",
     hdrs = ["api.h"],
-)
-
-cc_library(
-    name = "api_util",
-    hdrs = ["api_util.h"],
-    deps = [
-        ":api_hdrs",
-        ":logging",
-        ":status",
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/container:inlined_vector",
-        "@com_google_absl//absl/time",
-    ],
 )
 
 cc_library(
@@ -88,7 +74,6 @@ cc_library(
     name = "atomics",
     hdrs = ["atomics.h"],
     deps = [
-        ":platform_headers",
         ":target_platform",
     ],
 )
@@ -112,35 +97,6 @@ cc_test(
 )
 
 cc_library(
-    name = "buffer_string_util",
-    srcs = ["buffer_string_util.cc"],
-    hdrs = ["buffer_string_util.h"],
-    deps = [
-        ":memory",
-        ":shape",
-        ":source_location",
-        ":status",
-        "@com_google_absl//absl/container:flat_hash_map",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:optional",
-        "@com_google_absl//absl/types:span",
-    ],
-)
-
-cc_test(
-    name = "buffer_string_util_test",
-    srcs = ["buffer_string_util_test.cc"],
-    deps = [
-        ":buffer_string_util",
-        ":memory",
-        ":status",
-        ":status_matchers",
-        "//iree/testing:gtest_main",
-        "@com_google_absl//absl/strings",
-    ],
-)
-
-cc_library(
     name = "dynamic_library",
     srcs = [
         "dynamic_library_posix.cc",
@@ -150,7 +106,6 @@ cc_library(
     linkopts = ["-ldl"],
     deps = [
         ":logging",
-        ":platform_headers",
         ":status",
         ":target_platform",
         ":tracing",
@@ -184,8 +139,8 @@ cc_test(
         ":dynamic_library_test_library",
         ":file_io",
         ":status",
-        ":status_matchers",
         ":target_platform",
+        "//iree/testing:gtest",
         "//iree/testing:gtest_main",
     ],
 )
@@ -219,7 +174,7 @@ cc_test(
         ":file_path",
         ":logging",
         ":status",
-        ":status_matchers",
+        "//iree/testing:gtest",
         "//iree/testing:gtest_main",
         "@com_google_absl//absl/strings",
     ],
@@ -275,7 +230,6 @@ cc_library(
         ":file_mapping",
         ":memory",
         ":ref_ptr",
-        ":source_location",
         ":status",
         ":tracing",
         "@com_github_google_flatbuffers//:flatbuffers",
@@ -349,7 +303,6 @@ cc_library(
     hdrs = ["main.h"],
     deps = [
         ":logging",
-        ":platform_headers",
         ":target_platform",
     ],
 )
@@ -371,14 +324,6 @@ cc_library(
 )
 
 cc_library(
-    name = "platform_headers",
-    hdrs = ["platform_headers.h"],
-    deps = [
-        ":target_platform",
-    ],
-)
-
-cc_library(
     name = "ref_ptr",
     hdrs = ["ref_ptr.h"],
     deps = [
@@ -394,76 +339,6 @@ cc_test(
     deps = [
         ":ref_ptr",
         "//iree/testing:gtest_main",
-    ],
-)
-
-cc_library(
-    name = "shape",
-    srcs = ["shape.cc"],
-    hdrs = ["shape.h"],
-    deps = [
-        ":logging",
-        ":source_location",
-        ":status",
-        "@com_google_absl//absl/meta:type_traits",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:span",
-    ],
-)
-
-cc_test(
-    name = "shape_test",
-    srcs = ["shape_test.cc"],
-    deps = [
-        ":shape",
-        ":status",
-        ":status_matchers",
-        "//iree/testing:gtest_main",
-    ],
-)
-
-cc_library(
-    name = "shaped_buffer",
-    hdrs = ["shaped_buffer.h"],
-    deps = [
-        ":logging",
-        ":memory",
-        ":shape",
-        "@com_google_absl//absl/container:fixed_array",
-        "@com_google_absl//absl/types:span",
-    ],
-)
-
-cc_library(
-    name = "shaped_buffer_string_util",
-    srcs = ["shaped_buffer_string_util.cc"],
-    hdrs = ["shaped_buffer_string_util.h"],
-    deps = [
-        ":buffer_string_util",
-        ":memory",
-        ":shape",
-        ":shaped_buffer",
-        ":source_location",
-        ":status",
-        "@com_google_absl//absl/container:fixed_array",
-        "@com_google_absl//absl/strings",
-        "@com_google_absl//absl/types:optional",
-        "@com_google_absl//absl/types:span",
-    ],
-)
-
-cc_test(
-    name = "shaped_buffer_string_util_test",
-    srcs = ["shaped_buffer_string_util_test.cc"],
-    deps = [
-        ":buffer_string_util",
-        ":memory",
-        ":shaped_buffer",
-        ":shaped_buffer_string_util",
-        ":status",
-        ":status_matchers",
-        "//iree/testing:gtest_main",
-        "@com_google_absl//absl/strings",
     ],
 )
 
@@ -491,24 +366,11 @@ cc_test(
 )
 
 cc_library(
-    name = "source_location",
-    hdrs = ["source_location.h"],
-    deps = platform_trampoline_deps("source_location"),
-)
-
-cc_library(
     name = "status",
     hdrs = ["status.h"],
     deps = [
-        ":source_location",
-    ] + platform_trampoline_deps("status"),
-)
-
-cc_library(
-    name = "status_matchers",
-    testonly = True,
-    hdrs = ["status_matchers.h"],
-    deps = platform_trampoline_deps("status_matchers"),
+        "//iree/base/internal:status_internal",
+    ],
 )
 
 cc_test(
@@ -516,7 +378,7 @@ cc_test(
     srcs = ["status_test.cc"],
     deps = [
         ":status",
-        ":status_matchers",
+        "//iree/testing:gtest",
         "//iree/testing:gtest_main",
     ],
 )
@@ -530,7 +392,16 @@ cc_library(
     name = "time",
     hdrs = ["time.h"],
     deps = [
-        "@com_google_absl//absl/time",
+        ":api",
+    ],
+)
+
+cc_test(
+    name = "time_test",
+    srcs = ["time_test.cc"],
+    deps = [
+        ":time",
+        "//iree/testing:gtest_main",
     ],
 )
 
@@ -552,7 +423,6 @@ cc_library(
 #     deps = [
 #         ":logging",
 #         ":ref_ptr",
-#         ":source_location",
 #         ":status",
 #         ":time",
 #         "@com_google_absl//absl/base:core_headers",
@@ -568,9 +438,9 @@ cc_library(
 #     srcs = ["wait_handle_test.cc"],
 #     deps = [
 #         ":status",
-#         ":status_matchers",
 #         ":wait_handle",
 #         "@com_google_absl//absl/time",
+#         "//iree/testing:gtest",
 #         "//iree/testing:gtest_main",
 #     ],
 # )

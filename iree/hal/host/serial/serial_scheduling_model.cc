@@ -52,13 +52,13 @@ class UnsynchronizedCommandQueue final : public CommandQueue {
     for (auto& batch : batches) {
       DCHECK(batch.wait_semaphores.empty() && batch.signal_semaphores.empty())
           << "Semaphores must be handled by the wrapping queue";
-      RETURN_IF_ERROR(ProcessCommandBuffers(batch.command_buffers));
+      IREE_RETURN_IF_ERROR(ProcessCommandBuffers(batch.command_buffers));
     }
 
     return OkStatus();
   }
 
-  Status WaitIdle(absl::Time deadline) override {
+  Status WaitIdle(Time deadline_ns) override {
     // No-op.
     return OkStatus();
   }
@@ -73,7 +73,7 @@ class UnsynchronizedCommandQueue final : public CommandQueue {
       auto* inproc_command_buffer =
           static_cast<InProcCommandBuffer*>(command_buffer->impl());
       SerialCommandProcessor command_processor(supported_categories());
-      RETURN_IF_ERROR(inproc_command_buffer->Process(&command_processor));
+      IREE_RETURN_IF_ERROR(inproc_command_buffer->Process(&command_processor));
     }
     return OkStatus();
   }
@@ -110,20 +110,20 @@ StatusOr<ref_ptr<Semaphore>> SerialSchedulingModel::CreateSemaphore(
 }
 
 Status SerialSchedulingModel::WaitAllSemaphores(
-    absl::Span<const SemaphoreValue> semaphores, absl::Time deadline) {
+    absl::Span<const SemaphoreValue> semaphores, Time deadline_ns) {
   return CondVarSemaphore::WaitForSemaphores(semaphores, /*wait_all=*/true,
-                                             deadline);
+                                             deadline_ns);
 }
 
 StatusOr<int> SerialSchedulingModel::WaitAnySemaphore(
-    absl::Span<const SemaphoreValue> semaphores, absl::Time deadline) {
+    absl::Span<const SemaphoreValue> semaphores, Time deadline_ns) {
   return CondVarSemaphore::WaitForSemaphores(semaphores, /*wait_all=*/false,
-                                             deadline);
+                                             deadline_ns);
 }
 
-Status SerialSchedulingModel::WaitIdle(absl::Time deadline) {
+Status SerialSchedulingModel::WaitIdle(Time deadline_ns) {
   for (auto& command_queue : command_queues_) {
-    RETURN_IF_ERROR(command_queue->WaitIdle(deadline));
+    IREE_RETURN_IF_ERROR(command_queue->WaitIdle(deadline_ns));
   }
   return OkStatus();
 }

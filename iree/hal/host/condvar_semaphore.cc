@@ -53,14 +53,14 @@ Status CondVarSemaphore::Signal(uint64_t value) {
 
 void CondVarSemaphore::Fail(Status status) {
   absl::MutexLock lock(&mutex_);
-  status_ = status;
+  status_ = std::move(status);
   value_.store(UINT64_MAX, std::memory_order_release);
 }
 
 // static
 Status CondVarSemaphore::WaitForSemaphores(
     absl::Span<const SemaphoreValue> semaphores, bool wait_all,
-    absl::Time deadline) {
+    Time deadline_ns) {
   IREE_TRACE_SCOPE0("CondVarSemaphore::WaitForSemaphores");
 
   // Some of the semaphores may already be signaled; we only need to wait for
@@ -71,7 +71,7 @@ Status CondVarSemaphore::WaitForSemaphores(
   for (auto& semaphore_value : semaphores) {
     auto* semaphore =
         reinterpret_cast<CondVarSemaphore*>(semaphore_value.semaphore);
-    ASSIGN_OR_RETURN(uint64_t current_value, semaphore->Query());
+    IREE_ASSIGN_OR_RETURN(uint64_t current_value, semaphore->Query());
     if (current_value < semaphore_value.value) {
       // Semaphore has not yet hit the required value; wait for it.
       waitable_semaphores.push_back({semaphore, semaphore_value.value});
@@ -94,7 +94,7 @@ Status CondVarSemaphore::WaitForSemaphores(
                          semaphore_value->second;
                 },
                 &semaphore_value),
-            deadline)) {
+            absl::FromUnixNanos(static_cast<int64_t>(deadline_ns)))) {
       return DeadlineExceededErrorBuilder(IREE_LOC)
              << "Deadline exceeded waiting for semaphores";
     }
@@ -106,8 +106,8 @@ Status CondVarSemaphore::WaitForSemaphores(
   return OkStatus();
 }
 
-Status CondVarSemaphore::Wait(uint64_t value, absl::Time deadline) {
-  return WaitForSemaphores({{this, value}}, /*wait_all=*/true, deadline);
+Status CondVarSemaphore::Wait(uint64_t value, Time deadline_ns) {
+  return WaitForSemaphores({{this, value}}, /*wait_all=*/true, deadline_ns);
 }
 
 }  // namespace host

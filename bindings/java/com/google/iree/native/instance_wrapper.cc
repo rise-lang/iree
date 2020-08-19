@@ -14,7 +14,7 @@
 
 #include "bindings/java/com/google/iree/native/instance_wrapper.h"
 
-#include "iree/base/api_util.h"
+#include "iree/base/init.h"
 #include "iree/modules/hal/hal_module.h"
 #include "iree/modules/strings/strings_module.h"
 #include "iree/modules/tensorlist/native_module.h"
@@ -25,10 +25,17 @@ namespace java {
 namespace {
 
 void SetupVm() {
-  CHECK_EQ(IREE_STATUS_OK, iree_vm_register_builtin_types());
-  CHECK_EQ(IREE_STATUS_OK, iree_hal_module_register_types());
-  CHECK_EQ(IREE_STATUS_OK, iree_tensorlist_module_register_types());
-  CHECK_EQ(IREE_STATUS_OK, iree_strings_module_register_types());
+  // TODO(jennik): Pass flags through from java.
+  char binname[] = "libiree.so";
+  char* argv[] = {binname};
+  char** aargv = argv;
+  int argc = 1;
+  InitializeEnvironment(&argc, &aargv);
+
+  IREE_CHECK_OK(iree_vm_register_builtin_types());
+  IREE_CHECK_OK(iree_hal_module_register_types());
+  IREE_CHECK_OK(iree_tensorlist_module_register_types());
+  IREE_CHECK_OK(iree_strings_module_register_types());
 }
 
 }  // namespace
@@ -37,8 +44,7 @@ Status InstanceWrapper::Create() {
   static std::once_flag setup_vm_once;
   std::call_once(setup_vm_once, [] { SetupVm(); });
 
-  return FromApiStatus(
-      iree_vm_instance_create(IREE_ALLOCATOR_SYSTEM, &instance_), IREE_LOC);
+  return iree_vm_instance_create(iree_allocator_system(), &instance_);
 }
 
 iree_vm_instance_t* InstanceWrapper::instance() const { return instance_; }

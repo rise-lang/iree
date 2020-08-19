@@ -17,7 +17,9 @@
 import os
 import tempfile
 
+from absl import logging
 from absl.testing import parameterized
+import numpy as np
 from pyiree.tf.support import tf_utils
 import tensorflow as tf
 
@@ -48,29 +50,35 @@ class UtilsTests(tf.test.TestCase, parameterized.TestCase):
   @parameterized.named_parameters([
       {
           'testcase_name': 'single_backend',
-          'target_backends': ['vmla'],
+          'backend_infos': [tf_utils.BackendInfo('iree_vmla')],
       },
       {
-          'testcase_name': 'multiple_backends',
-          'target_backends': ['vmla', 'llvm'],
+          'testcase_name':
+              'multiple_backends',
+          'backend_infos': [
+              tf_utils.BackendInfo('iree_vmla'),
+              tf_utils.BackendInfo('iree_llvmjit')
+          ],
       },
   ])
-  def test_artifact_saving(self, target_backends):
+  def test_artifact_saving(self, backend_infos):
     with tempfile.TemporaryDirectory() as artifacts_dir:
       tf_module = ConstantModule()
       iree_compiled_module = tf_utils.compile_tf_module(
-          tf_module,
-          target_backends=target_backends,
-          artifacts_dir=artifacts_dir)
+          tf_module, backend_infos=backend_infos, artifacts_dir=artifacts_dir)
 
+      compiled_path = tf_utils._get_backends_path('compiled', backend_infos,
+                                                  artifacts_dir)
+      compiled_path = f'{compiled_path}.vmfb'
       artifacts_to_check = [
-          'saved_model',
-          f'tf_input__{"__".join(target_backends)}.mlir',
-          f'iree_input__{"__".join(target_backends)}.mlir',
-          f'compiled__{"__".join(target_backends)}.vmfb',
+          'tf_input.mlir',
+          'iree_input.mlir',
+          compiled_path,
       ]
       for artifact in artifacts_to_check:
-        self.assertTrue(os.path.exists(os.path.join(artifacts_dir, artifact)))
+        artifact_path = os.path.join(artifacts_dir, artifact)
+        logging.info('Checking path: %s', artifact_path)
+        self.assertTrue(os.path.exists(artifact_path))
 
   @parameterized.named_parameters([
       {
@@ -83,19 +91,31 @@ class UtilsTests(tf.test.TestCase, parameterized.TestCase):
       },
   ])
   def test_unaltered_state(self, backend_name):
-    info = tf_utils.BackendInfo.ALL[backend_name]
-    module = tf_utils.CompiledModule.compile(StatefulCountingModule, info)
+    backend_info = tf_utils.BackendInfo(backend_name)
+    module = backend_info.compile(StatefulCountingModule)
 
     # Test that incrementing works properly.
     self.assertEqual([0.], module.get_count())
     module.increment()
     self.assertEqual([1.], module.get_count())
 
-    reinitialized_module = tf_utils.CompiledModule.from_existing(module)
+    reinitialized_module = module.create_reinitialized()
     # Test reinitialization.
     self.assertEqual([0.], reinitialized_module.get_count())
     # Test independent state.
     self.assertEqual([1.], module.get_count())
+
+  def test_to_mlir_type(self):
+    self.assertEqual('i8', tf_utils.to_mlir_type(np.dtype('int8')))
+    self.assertEqual('i32', tf_utils.to_mlir_type(np.dtype('int32')))
+    self.assertEqual('f32', tf_utils.to_mlir_type(np.dtype('float32')))
+    self.assertEqual('f64', tf_utils.to_mlir_type(np.dtype('float64')))
+
+  def test_save_input_values(self):
+    inputs = [np.array([1, 2], dtype=np.int32)]
+    self.assertEqual('2xi32=1 2', tf_utils.save_input_values(inputs))
+    inputs = [np.array([1, 2], dtype=np.float32)]
+    self.assertEqual('2xf32=1.0 2.0', tf_utils.save_input_values(inputs))
 
 
 if __name__ == '__main__':

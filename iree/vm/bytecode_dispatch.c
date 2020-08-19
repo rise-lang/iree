@@ -12,56 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <assert.h>
 #include <string.h>
 
-#include "iree/base/alignment.h"
-#include "iree/base/target_platform.h"
-#include "iree/vm/bytecode_module_impl.h"
-#include "iree/vm/bytecode_op_table.h"
+#include "iree/vm/bytecode_dispatch_util.h"
 #include "iree/vm/list.h"
-
-// Enable to get some verbose logging; better than nothing until we have some
-// better tooling.
-#define IREE_DISPATCH_LOGGING 0
-
-#if IREE_DISPATCH_LOGGING
-#include <stdio.h>
-#define IREE_DISPATCH_LOG_OPCODE(op_name) \
-  fprintf(stderr, "DISPATCH %d %s\n", (int)pc, op_name)
-#define IREE_DISPATCH_LOG_CALL(target_function) \
-  fprintf(stderr, "CALL -> %s\n", iree_vm_function_name(&target_function).data);
-#else
-#define IREE_DISPATCH_LOG_OPCODE(...)
-#define IREE_DISPATCH_LOG_CALL(...)
-#endif  // IREE_DISPATCH_LOGGING
-
-#if defined(IREE_COMPILER_MSVC) && !defined(IREE_COMPILER_CLANG)
-#define IREE_DISPATCH_MODE_SWITCH 1
-#else
-#define IREE_DISPATCH_MODE_COMPUTED_GOTO 1
-#endif  // MSVC
-
-#ifndef NDEBUG
-#define VMCHECK(expr) assert(expr)
-#else
-#define VMCHECK(expr)
-#endif  // NDEBUG
-
-// Interleaved src-dst register sets for branch register remapping.
-// This structure is an overlay for the bytecode that is serialized in a
-// matching format.
-typedef struct {
-  uint16_t size;
-  struct pair {
-    uint16_t src_reg;
-    uint16_t dst_reg;
-  } pairs[];
-} iree_vm_register_remap_list_t;
-static_assert(iree_alignof(iree_vm_register_remap_list_t) == 2,
-              "Expecting byte alignment (to avoid padding)");
-static_assert(offsetof(iree_vm_register_remap_list_t, pairs) == 2,
-              "Expect no padding in the struct");
 
 // Remaps registers from a source set to a destination set within the same stack
 // frame. This is a way to perform a conditional multi-mov sequence instead of
@@ -108,87 +62,9 @@ iree_status_t iree_vm_bytecode_dispatch(
     iree_vm_bytecode_module_state_t* module_state, iree_vm_stack_t* stack,
     iree_vm_stack_frame_t* entry_frame,
     iree_vm_execution_result_t* out_result) {
-#if defined(IREE_DISPATCH_MODE_COMPUTED_GOTO)
-
-// Dispatch table mapping 1:1 with bytecode ops.
-// Each entry is a label within this function that can be used for computed
-// goto. You can find more information on computed goto here:
-// https://eli.thegreenplace.net/2012/07/12/computed-goto-for-efficient-dispatch-tables
-//
-// Note that we ensure the table is 256 elements long exactly to make sure
-// that unused opcodes are handled gracefully.
-//
-// Computed gotos are pretty much the best way to dispatch interpreters but are
-// not part of the C standard; GCC and clang support them but MSVC does not.
-// Because the performance difference is significant we support both here but
-// prefer the computed goto path where available. Empirical data shows them to
-// still be a win in 2019 on x64 desktops and arm32/arm64 mobile devices.
-#define BEGIN_DISPATCH()                     \
-  goto* kDispatchTable[bytecode_data[pc++]]; \
-  while (1)
-
-#define END_DISPATCH()
-
-#define DECLARE_DISPATCH_OPC(ordinal, name) &&_dispatch_##name,
-#define DECLARE_DISPATCH_RSV(ordinal) &&_dispatch_unhandled,
-  static const void* kDispatchTable[256] = {
-      IREE_VM_OP_TABLE(DECLARE_DISPATCH_OPC, DECLARE_DISPATCH_RSV)};
-
-#define DISPATCH_UNHANDLED() \
-  _dispatch_unhandled:       \
-  VMCHECK(0);                \
-  return IREE_STATUS_UNIMPLEMENTED;
-
-#define DISPATCH_OP(op_name, body)                          \
-  _dispatch_##op_name : IREE_DISPATCH_LOG_OPCODE(#op_name); \
-  body;                                                     \
-  goto* kDispatchTable[bytecode_data[pc++]];
-
-#else
-
-  // Switch-based dispatch. This is strictly less efficient than the computed
-  // goto approach above but is universally supported.
-
-#define BEGIN_DISPATCH() \
-  while (1) {            \
-    switch (bytecode_data[pc++])
-
-#define END_DISPATCH() }
-
-#define DISPATCH_UNHANDLED() \
-  default:                   \
-    VMCHECK(0);              \
-    return IREE_STATUS_UNIMPLEMENTED;
-
-#define DISPATCH_OP(op_name, body)      \
-  case IREE_VM_OP_##op_name:            \
-    IREE_DISPATCH_LOG_OPCODE(#op_name); \
-    body;                               \
-    break;
-
-#endif  // IREE_DISPATCH_MODE_COMPUTED_GOTO
-
-  static const int kRegSize = sizeof(uint16_t);
-
-#if defined(IREE_IS_LITTLE_ENDIAN)
-#define OP_I8(i) bytecode_data[pc + i]
-#define OP_I16(i) *((uint16_t*)&bytecode_data[pc + i])
-#define OP_I32(i) *((uint32_t*)&bytecode_data[pc + i])
-#else
-#define OP_I8(i) bytecode_data[pc + i]
-#define OP_I16(i)                         \
-  ((uint16_t)bytecode_data[pc + 0 + i]) | \
-      ((uint16_t)bytecode_data[pc + 1 + i] << 8)
-#define OP_I32(i)                                   \
-  ((uint32_t)bytecode_data[pc + 0 + i]) |           \
-      ((uint32_t)bytecode_data[pc + 1 + i] << 8) |  \
-      ((uint32_t)bytecode_data[pc + 2 + i] << 16) | \
-      ((uint32_t)bytecode_data[pc + 3 + i] << 24)
-#endif  // IREE_IS_LITTLE_ENDIAN
-
-#define OP_R_I32(i) regs.i32[OP_I16(i) & regs.i32_mask]
-#define OP_R_REF(i) regs.ref[OP_I16(i) & regs.ref_mask]
-#define OP_R_REF_IS_MOVE(i) (OP_I16(i) & IREE_REF_REGISTER_MOVE_BIT)
+  // When required emit the dispatch tables here referencing the labels we are
+  // defining below.
+  DEFINE_DISPATCH_TABLES();
 
   // Primary dispatch state. This is our 'native stack frame' and really
   // just enough to make dereferencing common addresses (like the current
@@ -208,612 +84,483 @@ iree_status_t iree_vm_bytecode_dispatch(
 
   memset(out_result, 0, sizeof(*out_result));
 
-  // NOTE: we should generate this with tblgen, as it has the encoding info.
-  // TODO(benvanik): at least generate operand reading/writing and sizes.
-  // This could look something like:
-  //     OP_GlobalLoadI32_value = OP_GlobalLoadI32_global;
-  //     pc += OP_Size_GlobalLoadI32;
-
-  BEGIN_DISPATCH() {
+  BEGIN_DISPATCH_CORE() {
     //===------------------------------------------------------------------===//
     // Globals
     //===------------------------------------------------------------------===//
 
-    DISPATCH_OP(GlobalLoadI32, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_GlobalLoadI32>,
-      //   VM_EncGlobalAttr<"global">,
-      //   VM_EncResult<"value">,
-      // ];
-      int byte_offset = OP_I32(0);
+    DISPATCH_OP(CORE, GlobalLoadI32, {
+      int32_t byte_offset = VM_DecGlobalAttr("global");
       if (byte_offset < 0 ||
           byte_offset >= module_state->rwdata_storage.data_length) {
-        return IREE_STATUS_OUT_OF_RANGE;
+        return iree_make_status(
+            IREE_STATUS_OUT_OF_RANGE,
+            "global byte_offset out of range: %d (rwdata=%zu)", byte_offset,
+            module_state->rwdata_storage.data_length);
       }
+      int32_t* value = VM_DecResultRegI32("value");
       const int32_t* global_ptr =
           (const int32_t*)(module_state->rwdata_storage.data + byte_offset);
-      OP_R_I32(4) = *global_ptr;
-      pc += 4 + kRegSize;
-    });
-    DISPATCH_OP(GlobalStoreI32, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_GlobalStoreI32>,
-      //   VM_EncGlobalAttr<"global">,
-      //   VM_EncOperand<"value", 0>,
-      // ];
-      int byte_offset = OP_I32(0);
-      if (byte_offset < 0 ||
-          byte_offset >= module_state->rwdata_storage.data_length) {
-        return IREE_STATUS_OUT_OF_RANGE;
-      }
-      int32_t* global_ptr =
-          (int32_t*)(module_state->rwdata_storage.data + byte_offset);
-      *global_ptr = OP_R_I32(4);
-      pc += 4 + kRegSize;
+      *value = *global_ptr;
     });
 
-    DISPATCH_OP(GlobalLoadIndirectI32, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_GlobalLoadIndirectI32>,
-      //   VM_EncOperand<"global", 0>,
-      //   VM_EncResult<"value">,
-      // ];
-      int byte_offset = OP_R_I32(0);
+    DISPATCH_OP(CORE, GlobalStoreI32, {
+      int32_t byte_offset = VM_DecGlobalAttr("global");
       if (byte_offset < 0 ||
           byte_offset >= module_state->rwdata_storage.data_length) {
-        return IREE_STATUS_OUT_OF_RANGE;
+        return iree_make_status(
+            IREE_STATUS_OUT_OF_RANGE,
+            "global byte_offset out of range: %d (rwdata=%zu)", byte_offset,
+            module_state->rwdata_storage.data_length);
       }
+      int32_t value = VM_DecOperandRegI32("value");
+      int32_t* global_ptr =
+          (int32_t*)(module_state->rwdata_storage.data + byte_offset);
+      *global_ptr = value;
+    });
+
+    DISPATCH_OP(CORE, GlobalLoadIndirectI32, {
+      int32_t byte_offset = VM_DecOperandRegI32("global");
+      if (byte_offset < 0 ||
+          byte_offset >= module_state->rwdata_storage.data_length) {
+        return iree_make_status(
+            IREE_STATUS_OUT_OF_RANGE,
+            "global byte_offset out of range: %d (rwdata=%zu)", byte_offset,
+            module_state->rwdata_storage.data_length);
+      }
+      int32_t* value = VM_DecResultRegI32("value");
       const int32_t* global_ptr =
           (const int32_t*)(module_state->rwdata_storage.data + byte_offset);
-      OP_R_I32(2) = *global_ptr;
-      pc += kRegSize + kRegSize;
+      *value = *global_ptr;
     });
-    DISPATCH_OP(GlobalStoreIndirectI32, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_GlobalStoreIndirectI32>,
-      //   VM_EncOperand<"global", 0>,
-      //   VM_EncOperand<"value", 1>,
-      // ];
-      int byte_offset = OP_R_I32(0);
+
+    DISPATCH_OP(CORE, GlobalStoreIndirectI32, {
+      int32_t byte_offset = VM_DecOperandRegI32("global");
       if (byte_offset < 0 ||
           byte_offset >= module_state->rwdata_storage.data_length) {
-        return IREE_STATUS_OUT_OF_RANGE;
+        return iree_make_status(
+            IREE_STATUS_OUT_OF_RANGE,
+            "global byte_offset out of range: %d (rwdata=%zu)", byte_offset,
+            module_state->rwdata_storage.data_length);
       }
+      int32_t value = VM_DecOperandRegI32("value");
       int32_t* global_ptr =
           (int32_t*)(module_state->rwdata_storage.data + byte_offset);
-      *global_ptr = OP_R_I32(2);
-      pc += kRegSize + kRegSize;
+      *global_ptr = value;
     });
 
-    DISPATCH_OP(GlobalLoadRef, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_GlobalLoadRef>,
-      //   VM_EncGlobalAttr<"global">,
-      //   VM_EncTypeOf<"value">,
-      //   VM_EncResult<"value">,
-      // ];
-      int global = OP_I32(0);
+    DISPATCH_OP(CORE, GlobalLoadRef, {
+      int32_t global = VM_DecGlobalAttr("global");
       if (global < 0 || global >= module_state->global_ref_count) {
-        return IREE_STATUS_OUT_OF_RANGE;
+        return iree_make_status(
+            IREE_STATUS_OUT_OF_RANGE,
+            "global ref ordinal out of range: %d (table=%zu)", global,
+            module_state->global_ref_count);
       }
-      int type_id = OP_I32(4);
-      type_id = type_id >= module->type_count ? 0 : type_id;
-      const iree_vm_type_def_t* type_def = &module->type_table[type_id];
+      const iree_vm_type_def_t* type_def = VM_DecTypeOf("value");
+      bool result_is_move;
+      iree_vm_ref_t* result = VM_DecResultRegRef("value", &result_is_move);
       iree_vm_ref_t* global_ref = &module_state->global_ref_table[global];
-      iree_vm_ref_retain_or_move_checked(OP_R_REF_IS_MOVE(8), global_ref,
-                                         type_def->ref_type, &OP_R_REF(8));
-      pc += 4 + 4 + kRegSize;
-    });
-    DISPATCH_OP(GlobalStoreRef, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_GlobalStoreRef>,
-      //   VM_EncGlobalAttr<"global">,
-      //   VM_EncTypeOf<"value">,
-      //   VM_EncOperand<"value", 0>,
-      // ];
-      int global = OP_I32(0);
-      if (global < 0 || global >= module_state->global_ref_count) {
-        return IREE_STATUS_OUT_OF_RANGE;
-      }
-      int type_id = OP_I32(4);
-      type_id = type_id >= module->type_count ? 0 : type_id;
-      const iree_vm_type_def_t* type_def = &module->type_table[type_id];
-      iree_vm_ref_t* global_ref = &module_state->global_ref_table[global];
-      iree_vm_ref_retain_or_move_checked(OP_R_REF_IS_MOVE(8), &OP_R_REF(8),
-                                         type_def->ref_type, global_ref);
-      pc += 4 + 4 + kRegSize;
+      IREE_RETURN_IF_ERROR(iree_vm_ref_retain_or_move_checked(
+          result_is_move, global_ref, type_def->ref_type, result));
     });
 
-    DISPATCH_OP(GlobalLoadIndirectRef, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_GlobalLoadIndirectRef>,
-      //   VM_EncOperand<"global", 0>,
-      //   VM_EncTypeOf<"value">,
-      //   VM_EncResult<"value">,
-      // ];
-      int global = OP_R_I32(0);
+    DISPATCH_OP(CORE, GlobalStoreRef, {
+      int32_t global = VM_DecGlobalAttr("global");
       if (global < 0 || global >= module_state->global_ref_count) {
-        return IREE_STATUS_OUT_OF_RANGE;
+        return iree_make_status(
+            IREE_STATUS_OUT_OF_RANGE,
+            "global ref ordinal out of range: %d (table=%zu)", global,
+            module_state->global_ref_count);
       }
-      int type_id = OP_I32(2);
-      type_id = type_id >= module->type_count ? 0 : type_id;
-      const iree_vm_type_def_t* type_def = &module->type_table[type_id];
+      const iree_vm_type_def_t* type_def = VM_DecTypeOf("value");
+      bool value_is_move;
+      iree_vm_ref_t* value = VM_DecOperandRegRef("value", &value_is_move);
       iree_vm_ref_t* global_ref = &module_state->global_ref_table[global];
-      iree_vm_ref_retain_or_move_checked(OP_R_REF_IS_MOVE(6), global_ref,
-                                         type_def->ref_type, &OP_R_REF(6));
-      pc += kRegSize + 4 + kRegSize;
+      IREE_RETURN_IF_ERROR(iree_vm_ref_retain_or_move_checked(
+          value_is_move, value, type_def->ref_type, global_ref));
     });
-    DISPATCH_OP(GlobalStoreIndirectRef, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_GlobalStoreIndirectRef>,
-      //   VM_EncOperand<"global", 0>,
-      //   VM_EncTypeOf<"value">,
-      //   VM_EncOperand<"value", 1>,
-      // ];
-      int global = OP_R_I32(0);
+
+    DISPATCH_OP(CORE, GlobalLoadIndirectRef, {
+      int32_t global = VM_DecGlobalAttr("global");
       if (global < 0 || global >= module_state->global_ref_count) {
-        return IREE_STATUS_OUT_OF_RANGE;
+        return iree_make_status(
+            IREE_STATUS_OUT_OF_RANGE,
+            "global ref ordinal out of range: %d (table=%zu)", global,
+            module_state->global_ref_count);
       }
-      int type_id = OP_I32(2);
-      type_id = type_id >= module->type_count ? 0 : type_id;
-      const iree_vm_type_def_t* type_def = &module->type_table[type_id];
+      const iree_vm_type_def_t* type_def = VM_DecTypeOf("value");
+      bool result_is_move;
+      iree_vm_ref_t* result = VM_DecResultRegRef("value", &result_is_move);
       iree_vm_ref_t* global_ref = &module_state->global_ref_table[global];
-      iree_vm_ref_retain_or_move_checked(OP_R_REF_IS_MOVE(6), &OP_R_REF(6),
-                                         type_def->ref_type, global_ref);
-      pc += kRegSize + 4 + kRegSize;
+      IREE_RETURN_IF_ERROR(iree_vm_ref_retain_or_move_checked(
+          result_is_move, global_ref, type_def->ref_type, result));
+    });
+
+    DISPATCH_OP(CORE, GlobalStoreIndirectRef, {
+      int32_t global = VM_DecGlobalAttr("global");
+      if (global < 0 || global >= module_state->global_ref_count) {
+        return iree_make_status(
+            IREE_STATUS_OUT_OF_RANGE,
+            "global ref ordinal out of range: %d (table=%zu)", global,
+            module_state->global_ref_count);
+      }
+      const iree_vm_type_def_t* type_def = VM_DecTypeOf("value");
+      bool value_is_move;
+      iree_vm_ref_t* value = VM_DecOperandRegRef("value", &value_is_move);
+      iree_vm_ref_t* global_ref = &module_state->global_ref_table[global];
+      IREE_RETURN_IF_ERROR(iree_vm_ref_retain_or_move_checked(
+          value_is_move, value, type_def->ref_type, global_ref));
     });
 
     //===------------------------------------------------------------------===//
     // Constants
     //===------------------------------------------------------------------===//
 
-    DISPATCH_OP(ConstI32, {
-      // let encoding = [
-      //   VM_EncOpcode<opcode>,
-      //   VM_EncIntAttr<"value", type.bitwidth>,
-      //   VM_EncResult<"result">,
-      // ];
-      OP_R_I32(4) = OP_I32(0);
-      pc += 4 + kRegSize;
+    DISPATCH_OP(CORE, ConstI32, {
+      int32_t value = VM_DecIntAttr32("value");
+      int32_t* result = VM_DecResultRegI32("result");
+      *result = value;
     });
 
-    DISPATCH_OP(ConstI32Zero, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_ConstI32Zero>,
-      //   VM_EncResult<"result">,
-      // ];
-      OP_R_I32(0) = 0;
-      pc += kRegSize;
+    DISPATCH_OP(CORE, ConstI32Zero, {
+      int32_t* result = VM_DecResultRegI32("result");
+      *result = 0;
     });
 
-    DISPATCH_OP(ConstRefZero, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_ConstRefZero>,
-      //   VM_EncResult<"result">,
-      // ];
-      iree_vm_ref_release(&OP_R_REF(0));
-      pc += kRegSize;
+    DISPATCH_OP(CORE, ConstRefZero, {
+      bool result_is_move;
+      iree_vm_ref_t* result = VM_DecResultRegRef("result", &result_is_move);
+      iree_vm_ref_release(result);
     });
 
-    DISPATCH_OP(ConstRefRodata, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_ConstRefRodata>,
-      //   VM_EncRodataAttr<"rodata">,
-      //   VM_EncResult<"value">,
-      // ];
-      int32_t rodata_ordinal = OP_I32(0);
+    DISPATCH_OP(CORE, ConstRefRodata, {
+      int32_t rodata_ordinal = VM_DecRodataAttr("rodata");
       if (rodata_ordinal < 0 ||
           rodata_ordinal >= module_state->rodata_ref_count) {
-        return IREE_STATUS_OUT_OF_RANGE;
+        return iree_make_status(
+            IREE_STATUS_OUT_OF_RANGE,
+            "rodata ref ordinal out of range: %d (table=%zu)", rodata_ordinal,
+            module_state->rodata_ref_count);
       }
-      // TODO(benvanik): allow decompression callbacks to run now (if needed).
-      iree_vm_ref_wrap_retain(&module_state->rodata_ref_table[rodata_ordinal],
-                              iree_vm_ro_byte_buffer_type_id(), &OP_R_REF(4));
-      pc += 4 + kRegSize;
+      bool result_is_move;
+      iree_vm_ref_t* result = VM_DecResultRegRef("value", &result_is_move);
+      IREE_RETURN_IF_ERROR(iree_vm_ref_wrap_retain(
+          &module_state->rodata_ref_table[rodata_ordinal],
+          iree_vm_ro_byte_buffer_type_id(), result));
     });
 
     //===------------------------------------------------------------------===//
     // Lists
     //===------------------------------------------------------------------===//
 
-    DISPATCH_OP(ListAlloc, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_ListAlloc>,
-      //   VM_EncType<"{{element_type}}">,
-      //   VM_EncOperand<"initial_capacity", 0>,
-      //   VM_EncResult<"result">,
-      // ];
-      int element_type_id = OP_I32(0);
-      element_type_id =
-          element_type_id >= module->type_count ? 0 : element_type_id;
-      const iree_vm_type_def_t* element_type_def =
-          &module->type_table[element_type_id];
-      iree_host_size_t initial_capacity = (iree_host_size_t)OP_R_I32(4);
+    DISPATCH_OP(CORE, ListAlloc, {
+      const iree_vm_type_def_t* element_type_def = VM_DecTypeOf("element_type");
+      iree_host_size_t initial_capacity =
+          VM_DecOperandRegI32("initial_capacity");
+      bool result_is_move;
+      iree_vm_ref_t* result = VM_DecResultRegRef("result", &result_is_move);
       iree_vm_list_t* list = NULL;
       IREE_RETURN_IF_ERROR(iree_vm_list_create(
           element_type_def, initial_capacity, module_state->allocator, &list));
-      iree_vm_ref_wrap_assign(list, iree_vm_list_type_id(), &OP_R_REF(6));
-      pc += 4 + kRegSize + kRegSize;
+      IREE_RETURN_IF_ERROR(
+          iree_vm_ref_wrap_assign(list, iree_vm_list_type_id(), result));
     });
 
-    DISPATCH_OP(ListReserve, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_ListReserve>,
-      //   VM_EncOperand<"list", 0>,
-      //   VM_EncOperand<"minimum_capacity", 1>,
-      // ];
-      iree_vm_ref_t* list_ref = &OP_R_REF(0);
+    DISPATCH_OP(CORE, ListReserve, {
+      bool list_is_move;
+      iree_vm_ref_t* list_ref = VM_DecOperandRegRef("list", &list_is_move);
       iree_vm_list_t* list = iree_vm_list_deref(list_ref);
-      if (!list) return IREE_STATUS_INVALID_ARGUMENT;
-      IREE_RETURN_IF_ERROR(iree_vm_list_reserve(list, OP_R_I32(2)));
-      pc += kRegSize + kRegSize;
+      if (!list) {
+        return iree_make_status(IREE_STATUS_INVALID_ARGUMENT, "list is null");
+      }
+      int32_t minimum_capacity = VM_DecOperandRegI32("minimum_capacity");
+      IREE_RETURN_IF_ERROR(iree_vm_list_reserve(list, minimum_capacity));
     });
 
-    DISPATCH_OP(ListSize, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_ListSize>,
-      //   VM_EncOperand<"list", 0>,
-      //   VM_EncResult<"result">,
-      // ];
-      iree_vm_ref_t* list_ref = &OP_R_REF(0);
+    DISPATCH_OP(CORE, ListSize, {
+      bool list_is_move;
+      iree_vm_ref_t* list_ref = VM_DecOperandRegRef("list", &list_is_move);
       iree_vm_list_t* list = iree_vm_list_deref(list_ref);
-      if (!list) return IREE_STATUS_INVALID_ARGUMENT;
-      OP_R_I32(2) = (int32_t)iree_vm_list_size(list);
-      pc += kRegSize + kRegSize;
+      if (!list) {
+        return iree_make_status(IREE_STATUS_INVALID_ARGUMENT, "list is null");
+      }
+      int32_t* result = VM_DecResultRegI32("result");
+      *result = (int32_t)iree_vm_list_size(list);
     });
 
-    DISPATCH_OP(ListResize, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_ListResize>,
-      //   VM_EncOperand<"list", 0>,
-      //   VM_EncOperand<"new_size", 1>,
-      // ];
-      iree_vm_ref_t* list_ref = &OP_R_REF(0);
+    DISPATCH_OP(CORE, ListResize, {
+      bool list_is_move;
+      iree_vm_ref_t* list_ref = VM_DecOperandRegRef("list", &list_is_move);
       iree_vm_list_t* list = iree_vm_list_deref(list_ref);
-      if (!list) return IREE_STATUS_INVALID_ARGUMENT;
-      IREE_RETURN_IF_ERROR(iree_vm_list_resize(list, OP_R_I32(2)));
-      pc += kRegSize + kRegSize;
+      if (!list) {
+        return iree_make_status(IREE_STATUS_INVALID_ARGUMENT, "list is null");
+      }
+      int32_t new_size = VM_DecOperandRegI32("new_size");
+      IREE_RETURN_IF_ERROR(iree_vm_list_resize(list, new_size));
     });
 
-    DISPATCH_OP(ListGetI32, {
-      // let encoding = [
-      //   VM_EncOpcode<opcode>,
-      //   VM_EncOperand<"list", 0>,
-      //   VM_EncOperand<"index", 1>,
-      //   VM_EncResult<"result">,
-      // ];
-      iree_vm_ref_t* list_ref = &OP_R_REF(0);
+    DISPATCH_OP(CORE, ListGetI32, {
+      bool list_is_move;
+      iree_vm_ref_t* list_ref = VM_DecOperandRegRef("list", &list_is_move);
       iree_vm_list_t* list = iree_vm_list_deref(list_ref);
-      if (!list) return IREE_STATUS_INVALID_ARGUMENT;
+      if (!list) {
+        return iree_make_status(IREE_STATUS_INVALID_ARGUMENT, "list is null");
+      }
+      int32_t index = VM_DecOperandRegI32("index");
+      int32_t* result = VM_DecResultRegI32("result");
       iree_vm_value_t value;
       IREE_RETURN_IF_ERROR(iree_vm_list_get_value_as(
-          list, OP_R_I32(2), IREE_VM_VALUE_TYPE_I32, &value));
-      OP_R_I32(4) = value.i32;
-      pc += kRegSize + kRegSize + kRegSize;
+          list, index, IREE_VM_VALUE_TYPE_I32, &value));
+      *result = value.i32;
     });
 
-    DISPATCH_OP(ListSetI32, {
-      // let encoding = [
-      //   VM_EncOpcode<opcode>,
-      //   VM_EncOperand<"list", 0>,
-      //   VM_EncOperand<"index", 1>,
-      //   VM_EncOperand<"value", 2>,
-      // ];
-      iree_vm_ref_t* list_ref = &OP_R_REF(0);
+    DISPATCH_OP(CORE, ListSetI32, {
+      bool list_is_move;
+      iree_vm_ref_t* list_ref = VM_DecOperandRegRef("list", &list_is_move);
       iree_vm_list_t* list = iree_vm_list_deref(list_ref);
-      if (!list) return IREE_STATUS_INVALID_ARGUMENT;
-      iree_vm_value_t value = iree_vm_value_make_i32(OP_R_I32(4));
-      IREE_RETURN_IF_ERROR(iree_vm_list_set_value(list, OP_R_I32(2), &value));
-      pc += kRegSize + kRegSize + kRegSize;
+      if (!list) {
+        return iree_make_status(IREE_STATUS_INVALID_ARGUMENT, "list is null");
+      }
+      int32_t index = VM_DecOperandRegI32("index");
+      int32_t raw_value = VM_DecOperandRegI32("raw_value");
+      iree_vm_value_t value = iree_vm_value_make_i32(raw_value);
+      IREE_RETURN_IF_ERROR(iree_vm_list_set_value(list, index, &value));
     });
 
-    DISPATCH_OP(ListGetRef, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_ListGetRef>,
-      //   VM_EncOperand<"list", 0>,
-      //   VM_EncOperand<"index", 1>,
-      //   VM_EncTypeOf<"result">,
-      //   VM_EncResult<"result">,
-      // ];
-      iree_vm_ref_t* list_ref = &OP_R_REF(0);
-      iree_vm_list_t* list = iree_vm_list_deref(list_ref);
-      if (!list) return IREE_STATUS_INVALID_ARGUMENT;
-      return IREE_STATUS_UNIMPLEMENTED;
+    DISPATCH_OP(CORE, ListGetRef, {
+      // bool list_is_move;
+      // iree_vm_ref_t* list_ref = VM_DecOperandRegRef("list", &list_is_move);
+      // iree_vm_list_t* list = iree_vm_list_deref(list_ref);
+      // if (!list) return iree_make_status(IREE_STATUS_INVALID_ARGUMENT);
+      // int32_t index = VM_DecOperandRegI32("index");
+      // iree_vm_ref_t* result = VM_DecResultRegRef("result");
+      return iree_make_status(IREE_STATUS_UNIMPLEMENTED,
+                              "vm.list.get.ref not implemented");
     });
 
-    DISPATCH_OP(ListSetRef, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_ListSetRef>,
-      //   VM_EncOperand<"list", 0>,
-      //   VM_EncOperand<"index", 1>,
-      //   VM_EncOperand<"value", 2>,
-      // ];
-      iree_vm_ref_t* list_ref = &OP_R_REF(0);
-      iree_vm_list_t* list = iree_vm_list_deref(list_ref);
-      if (!list) return IREE_STATUS_INVALID_ARGUMENT;
-      return IREE_STATUS_UNIMPLEMENTED;
+    DISPATCH_OP(CORE, ListSetRef, {
+      // bool list_is_move;
+      // iree_vm_ref_t* list_ref = VM_DecOperandRegRef("list", &list_is_move);
+      // iree_vm_list_t* list = iree_vm_list_deref(list_ref);
+      // if (!list) return iree_make_status(IREE_STATUS_INVALID_ARGUMENT);
+      // int32_t index = VM_DecOperandRegI32("index");
+      // bool operand_is_move = VM_DecOperandRegRefIsMove("value");
+      // iree_vm_ref_t* operand = VM_DecOperandRegRef("value");
+      return iree_make_status(IREE_STATUS_UNIMPLEMENTED,
+                              "vm.list.set.ref not implemented");
     });
 
     //===------------------------------------------------------------------===//
     // Conditional assignment
     //===------------------------------------------------------------------===//
 
-    DISPATCH_OP(SelectI32, {
-      // let encoding = [
-      //   VM_EncOpcode<opcode>,
-      //   VM_EncOperand<"condition", 0>,
-      //   VM_EncOperand<"true_value", 1>,
-      //   VM_EncOperand<"false_value", 2>,
-      //   VM_EncResult<"result">,
-      // ];
-      OP_R_I32(6) = OP_R_I32(0) ? OP_R_I32(2) : OP_R_I32(4);
-      pc += kRegSize + kRegSize + kRegSize + kRegSize;
+    DISPATCH_OP(CORE, SelectI32, {
+      int32_t condition = VM_DecOperandRegI32("condition");
+      int32_t true_value = VM_DecOperandRegI32("true_value");
+      int32_t false_value = VM_DecOperandRegI32("false_value");
+      int32_t* result = VM_DecResultRegI32("result");
+      *result = condition ? true_value : false_value;
     });
 
-    DISPATCH_OP(SelectRef, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_SelectRef>,
-      //   VM_EncOperand<"condition", 0>,
-      //   VM_EncTypeOf<"true_value">,
-      //   VM_EncOperand<"true_value", 1>,
-      //   VM_EncOperand<"false_value", 2>,
-      //   VM_EncResult<"result">,
-      // ];
+    DISPATCH_OP(CORE, SelectRef, {
+      int32_t condition = VM_DecOperandRegI32("condition");
       // TODO(benvanik): remove the type_id and use either LHS/RHS (if both are
       // null then output is always null so no need to know the type).
-      int type_id = OP_I32(2);
-      type_id = type_id >= module->type_count ? 0 : type_id;
-      const iree_vm_type_def_t* type_def = &module->type_table[type_id];
-      if (OP_R_I32(0)) {
-        // Select LHS (+6).
-        iree_vm_ref_retain_or_move_checked(OP_R_REF_IS_MOVE(6), &OP_R_REF(6),
-                                           type_def->ref_type, &OP_R_REF(10));
-        if (OP_R_REF_IS_MOVE(10)) iree_vm_ref_release(&OP_R_REF(8));
+      const iree_vm_type_def_t* type_def = VM_DecTypeOf("true_value");
+      bool true_value_is_move;
+      iree_vm_ref_t* true_value =
+          VM_DecOperandRegRef("true_value", &true_value_is_move);
+      bool false_value_is_move;
+      iree_vm_ref_t* false_value =
+          VM_DecOperandRegRef("false_value", &false_value_is_move);
+      bool result_is_move;
+      iree_vm_ref_t* result = VM_DecResultRegRef("result", &result_is_move);
+      if (condition) {
+        // Select LHS.
+        IREE_RETURN_IF_ERROR(iree_vm_ref_retain_or_move_checked(
+            true_value_is_move, true_value, type_def->ref_type, result));
+        if (false_value_is_move) iree_vm_ref_release(false_value);
       } else {
-        // Select RHS (+8).
-        iree_vm_ref_retain_or_move_checked(OP_R_REF_IS_MOVE(8), &OP_R_REF(8),
-                                           type_def->ref_type, &OP_R_REF(10));
-        if (OP_R_REF_IS_MOVE(6)) iree_vm_ref_release(&OP_R_REF(6));
+        // Select RHS.
+        IREE_RETURN_IF_ERROR(iree_vm_ref_retain_or_move_checked(
+            false_value_is_move, false_value, type_def->ref_type, result));
+        if (true_value_is_move) iree_vm_ref_release(true_value);
       }
-      pc += kRegSize + 4 + kRegSize + kRegSize + kRegSize;
     });
 
-    DISPATCH_OP(SwitchI32, {
-      // let encoding = [
-      //   VM_EncOpcode<opcode>,
-      //   VM_EncOperand<"index", 0>,
-      //   VM_EncIntAttr<"default_value", 32>,
-      //   VM_EncVariadicOperands<"values">,
-      //   VM_EncResult<"result">,
-      // ];
-      int32_t index = OP_R_I32(0);
-      int32_t default_value = OP_I32(2);
+    DISPATCH_OP(CORE, SwitchI32, {
+      int32_t index = VM_DecOperandRegI32("index");
+      int32_t default_value = VM_DecIntAttr32("default_value");
       const iree_vm_register_list_t* value_reg_list =
-          (const iree_vm_register_list_t*)&bytecode_data[pc + 6];
-      pc += kRegSize + 4 + kRegSize + value_reg_list->size * kRegSize;
-      int32_t new_value = default_value;
+          VM_DecVariadicOperands("values");
+      int32_t* result = VM_DecResultRegI32("result");
       if (index >= 0 && index < value_reg_list->size) {
-        new_value = regs.i32[value_reg_list->registers[index] & regs.i32_mask];
+        *result = regs.i32[value_reg_list->registers[index] & regs.i32_mask];
+      } else {
+        *result = default_value;
       }
-      OP_R_I32(0) = new_value;
-      pc += kRegSize;
     });
 
-    DISPATCH_OP(SwitchRef, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_SwitchRef>,
-      //   VM_EncOperand<"index", 0>,
-      //   VM_EncTypeOf<"result">,
-      //   VM_EncOperand<"default_value", 1>,
-      //   VM_EncVariadicOperands<"values">,
-      //   VM_EncResult<"result">,
-      // ];
-      int32_t index = OP_R_I32(0);
-      int32_t type_id = OP_I32(2);
-      iree_vm_ref_t* default_value = &OP_R_REF(6);
-      int is_move = OP_R_REF_IS_MOVE(6);
+    DISPATCH_OP(CORE, SwitchRef, {
+      int32_t index = VM_DecOperandRegI32("index");
+      const iree_vm_type_def_t* type_def = VM_DecTypeOf("result");
+      bool default_is_move;
+      iree_vm_ref_t* default_value =
+          VM_DecOperandRegRef("default_value", &default_is_move);
       const iree_vm_register_list_t* value_reg_list =
-          (const iree_vm_register_list_t*)&bytecode_data[pc + 8];
-      // Skip over all operands.
-      pc +=
-          kRegSize + 4 + kRegSize + kRegSize + value_reg_list->size * kRegSize;
-      iree_vm_ref_t* new_value = default_value;
+          VM_DecVariadicOperands("values");
+      bool result_is_move;
+      iree_vm_ref_t* result = VM_DecResultRegRef("result", &result_is_move);
       if (index >= 0 && index < value_reg_list->size) {
-        new_value = &regs.ref[value_reg_list->registers[index] & regs.ref_mask];
-        is_move = value_reg_list->registers[index] & IREE_REF_REGISTER_MOVE_BIT;
+        bool is_move =
+            value_reg_list->registers[index] & IREE_REF_REGISTER_MOVE_BIT;
+        iree_vm_ref_t* new_value =
+            &regs.ref[value_reg_list->registers[index] & regs.ref_mask];
+        IREE_RETURN_IF_ERROR(iree_vm_ref_retain_or_move_checked(
+            is_move, new_value, type_def->ref_type, result));
+      } else {
+        IREE_RETURN_IF_ERROR(iree_vm_ref_retain_or_move_checked(
+            default_is_move, default_value, type_def->ref_type, result));
       }
-      iree_vm_ref_t* result_reg = &OP_R_REF(0);
-      pc += kRegSize;
-      type_id = type_id >= module->type_count ? 0 : type_id;
-      const iree_vm_type_def_t* type_def = &module->type_table[type_id];
-      iree_vm_ref_retain_or_move_checked(is_move, new_value, type_def->ref_type,
-                                         result_reg);
     });
 
     //===------------------------------------------------------------------===//
     // Native integer arithmetic
     //===------------------------------------------------------------------===//
 
-    // let encoding = [
-    //   VM_EncOpcode<opcode>,
-    //   VM_EncOperand<"operand", 0>,
-    //   VM_EncResult<"result">,
-    // ];
-#define DISPATCH_OP_UNARY_ALU_I32(op_name, type, op) \
-  DISPATCH_OP(op_name, {                             \
-    OP_R_I32(2) = (int32_t)(op((type)OP_R_I32(0)));  \
-    pc += kRegSize + kRegSize;                       \
+#define DISPATCH_OP_CORE_UNARY_ALU_I32(op_name, type, op) \
+  DISPATCH_OP(CORE, op_name, {                            \
+    int32_t operand = VM_DecOperandRegI32("operand");     \
+    int32_t* result = VM_DecResultRegI32("result");       \
+    *result = (int32_t)(op((type)operand));               \
   });
 
-    // let encoding = [
-    //   VM_EncOpcode<opcode>,
-    //   VM_EncOperand<"lhs", 0>,
-    //   VM_EncOperand<"rhs", 1>,
-    //   VM_EncResult<"result">,
-    // ];
-#define DISPATCH_OP_BINARY_ALU_I32(op_name, type, op)                  \
-  DISPATCH_OP(op_name, {                                               \
-    OP_R_I32(4) = (int32_t)(((type)OP_R_I32(0))op((type)OP_R_I32(2))); \
-    pc += kRegSize + kRegSize + kRegSize;                              \
+#define DISPATCH_OP_CORE_BINARY_ALU_I32(op_name, type, op) \
+  DISPATCH_OP(CORE, op_name, {                             \
+    int32_t lhs = VM_DecOperandRegI32("lhs");              \
+    int32_t rhs = VM_DecOperandRegI32("rhs");              \
+    int32_t* result = VM_DecResultRegI32("result");        \
+    *result = (int32_t)(((type)lhs)op((type)rhs));         \
   });
 
-    DISPATCH_OP_BINARY_ALU_I32(AddI32, int32_t, +);
-    DISPATCH_OP_BINARY_ALU_I32(SubI32, int32_t, -);
-    DISPATCH_OP_BINARY_ALU_I32(MulI32, int32_t, *);
-    DISPATCH_OP_BINARY_ALU_I32(DivI32S, int32_t, /);
-    DISPATCH_OP_BINARY_ALU_I32(DivI32U, uint32_t, /);
-    DISPATCH_OP_BINARY_ALU_I32(RemI32S, int32_t, %);
-    DISPATCH_OP_BINARY_ALU_I32(RemI32U, uint32_t, %);
-    DISPATCH_OP_UNARY_ALU_I32(NotI32, uint32_t, ~);
-    DISPATCH_OP_BINARY_ALU_I32(AndI32, uint32_t, &);
-    DISPATCH_OP_BINARY_ALU_I32(OrI32, uint32_t, |);
-    DISPATCH_OP_BINARY_ALU_I32(XorI32, uint32_t, ^);
+    DISPATCH_OP_CORE_BINARY_ALU_I32(AddI32, int32_t, +);
+    DISPATCH_OP_CORE_BINARY_ALU_I32(SubI32, int32_t, -);
+    DISPATCH_OP_CORE_BINARY_ALU_I32(MulI32, int32_t, *);
+    DISPATCH_OP_CORE_BINARY_ALU_I32(DivI32S, int32_t, /);
+    DISPATCH_OP_CORE_BINARY_ALU_I32(DivI32U, uint32_t, /);
+    DISPATCH_OP_CORE_BINARY_ALU_I32(RemI32S, int32_t, %);
+    DISPATCH_OP_CORE_BINARY_ALU_I32(RemI32U, uint32_t, %);
+    DISPATCH_OP_CORE_UNARY_ALU_I32(NotI32, uint32_t, ~);
+    DISPATCH_OP_CORE_BINARY_ALU_I32(AndI32, uint32_t, &);
+    DISPATCH_OP_CORE_BINARY_ALU_I32(OrI32, uint32_t, |);
+    DISPATCH_OP_CORE_BINARY_ALU_I32(XorI32, uint32_t, ^);
 
     //===------------------------------------------------------------------===//
     // Casting and type conversion/emulation
     //===------------------------------------------------------------------===//
 
-    // let encoding = [
-    //   VM_EncOpcode<opcode>,
-    //   VM_EncOperand<"operand", 0>,
-    //   VM_EncResult<"result">,
-    // ];
-#define DISPATCH_OP_CAST_I32(op_name, src_type, dst_type) \
-  DISPATCH_OP(op_name, {                                  \
-    OP_R_I32(2) = (dst_type)((src_type)OP_R_I32(0));      \
-    pc += kRegSize + kRegSize;                            \
+#define DISPATCH_OP_CORE_CAST_I32(op_name, src_type, dst_type) \
+  DISPATCH_OP(CORE, op_name, {                                 \
+    int32_t operand = VM_DecOperandRegI32("operand");          \
+    int32_t* result = VM_DecResultRegI32("result");            \
+    *result = (dst_type)((src_type)operand);                   \
   });
 
-    DISPATCH_OP_CAST_I32(TruncI8, uint8_t, uint32_t);
-    DISPATCH_OP_CAST_I32(TruncI16, uint16_t, uint32_t);
-    DISPATCH_OP_CAST_I32(ExtI8I32S, int8_t, int32_t);
-    DISPATCH_OP_CAST_I32(ExtI16I32S, int16_t, int32_t);
+    DISPATCH_OP_CORE_CAST_I32(TruncI32I8, uint32_t, uint8_t);
+    DISPATCH_OP_CORE_CAST_I32(TruncI32I16, uint32_t, uint16_t);
+    DISPATCH_OP_CORE_CAST_I32(ExtI8I32S, int8_t, int32_t);
+    DISPATCH_OP_CORE_CAST_I32(ExtI8I32U, uint8_t, uint32_t);
+    DISPATCH_OP_CORE_CAST_I32(ExtI16I32S, int16_t, int32_t);
+    DISPATCH_OP_CORE_CAST_I32(ExtI16I32U, uint16_t, uint32_t);
 
     //===------------------------------------------------------------------===//
     // Native bitwise shifts and rotates
     //===------------------------------------------------------------------===//
 
-    // let encoding = [
-    //   VM_EncOpcode<opcode>,
-    //   VM_EncOperand<"operand", 0>,
-    //   VM_EncIntAttr<"amount", type.bitwidth>,
-    //   VM_EncResult<"result">,
-    // ];
-#define DISPATCH_OP_SHIFT_I32(op_name, type, op)             \
-  DISPATCH_OP(op_name, {                                     \
-    OP_R_I32(4) = (int32_t)(((type)OP_R_I32(0))op OP_I8(2)); \
-    pc += kRegSize + kRegSize + kRegSize;                    \
+#define DISPATCH_OP_CORE_SHIFT_I32(op_name, type, op) \
+  DISPATCH_OP(CORE, op_name, {                        \
+    int32_t operand = VM_DecOperandRegI32("operand"); \
+    int8_t amount = VM_DecConstI8("amount");          \
+    int32_t* result = VM_DecResultRegI32("result");   \
+    *result = (int32_t)(((type)operand)op amount);    \
   });
 
-    DISPATCH_OP_SHIFT_I32(ShlI32, int32_t, <<);
-    DISPATCH_OP_SHIFT_I32(ShrI32S, int32_t, >>);
-    DISPATCH_OP_SHIFT_I32(ShrI32U, uint32_t, >>);
+    DISPATCH_OP_CORE_SHIFT_I32(ShlI32, int32_t, <<);
+    DISPATCH_OP_CORE_SHIFT_I32(ShrI32S, int32_t, >>);
+    DISPATCH_OP_CORE_SHIFT_I32(ShrI32U, uint32_t, >>);
 
     //===------------------------------------------------------------------===//
     // Comparison ops
     //===------------------------------------------------------------------===//
 
-    // let encoding = [
-    //   VM_EncOpcode<opcode>,
-    //   VM_EncOperand<"lhs", 0>,
-    //   VM_EncOperand<"rhs", 1>,
-    //   VM_EncResult<"result">,
-    // ];
-#define DISPATCH_OP_CMP_I32(op_name, type, op)                        \
-  DISPATCH_OP(op_name, {                                              \
-    OP_R_I32(4) = (((type)OP_R_I32(0))op((type)OP_R_I32(2))) ? 1 : 0; \
-    pc += kRegSize + kRegSize + kRegSize;                             \
+#define DISPATCH_OP_CORE_CMP_I32(op_name, type, op) \
+  DISPATCH_OP(CORE, op_name, {                      \
+    int32_t lhs = VM_DecOperandRegI32("lhs");       \
+    int32_t rhs = VM_DecOperandRegI32("rhs");       \
+    int32_t* result = VM_DecResultRegI32("result"); \
+    *result = (((type)lhs)op((type)rhs)) ? 1 : 0;   \
   });
 
-    DISPATCH_OP_CMP_I32(CmpEQI32, int32_t, ==);
-    DISPATCH_OP_CMP_I32(CmpNEI32, int32_t, !=);
-    DISPATCH_OP_CMP_I32(CmpLTI32S, int32_t, <);
-    DISPATCH_OP_CMP_I32(CmpLTI32U, uint32_t, <);
-    DISPATCH_OP_CMP_I32(CmpLTEI32S, int32_t, <=);
-    DISPATCH_OP_CMP_I32(CmpLTEI32U, uint32_t, <=);
-    DISPATCH_OP_CMP_I32(CmpGTI32S, int32_t, >);
-    DISPATCH_OP_CMP_I32(CmpGTI32U, uint32_t, >);
-    DISPATCH_OP_CMP_I32(CmpGTEI32S, int32_t, >=);
-    DISPATCH_OP_CMP_I32(CmpGTEI32U, uint32_t, >=);
-    DISPATCH_OP(CmpNZI32, {
-      OP_R_I32(2) = (OP_R_I32(0) != 0) ? 1 : 0;
-      pc += kRegSize + kRegSize;
+    DISPATCH_OP_CORE_CMP_I32(CmpEQI32, int32_t, ==);
+    DISPATCH_OP_CORE_CMP_I32(CmpNEI32, int32_t, !=);
+    DISPATCH_OP_CORE_CMP_I32(CmpLTI32S, int32_t, <);
+    DISPATCH_OP_CORE_CMP_I32(CmpLTI32U, uint32_t, <);
+    DISPATCH_OP(CORE, CmpNZI32, {
+      int32_t operand = VM_DecOperandRegI32("operand");
+      int32_t* result = VM_DecResultRegI32("result");
+      *result = (operand != 0) ? 1 : 0;
     });
 
-    DISPATCH_OP(CmpEQRef, {
-      // let encoding = [
-      //   VM_EncOpcode<opcode>,
-      //   VM_EncOperand<"lhs", 0>,
-      //   VM_EncOperand<"rhs", 1>,
-      //   VM_EncResult<"result">,
-      // ];
-      // TODO(benvanik): move refs.
-      OP_R_I32(4) = iree_vm_ref_equal(&OP_R_REF(0), &OP_R_REF(2));
-      if (OP_R_REF_IS_MOVE(0)) iree_vm_ref_release(&OP_R_REF(0));
-      if (OP_R_REF_IS_MOVE(2)) iree_vm_ref_release(&OP_R_REF(2));
-      pc += kRegSize + kRegSize + kRegSize;
+    DISPATCH_OP(CORE, CmpEQRef, {
+      bool lhs_is_move;
+      iree_vm_ref_t* lhs = VM_DecOperandRegRef("lhs", &lhs_is_move);
+      bool rhs_is_move;
+      iree_vm_ref_t* rhs = VM_DecOperandRegRef("rhs", &rhs_is_move);
+      int32_t* result = VM_DecResultRegI32("result");
+      *result = iree_vm_ref_equal(lhs, rhs);
+      if (lhs_is_move) iree_vm_ref_release(lhs);
+      if (rhs_is_move) iree_vm_ref_release(rhs);
     });
-    DISPATCH_OP(CmpNERef, {
-      // let encoding = [
-      //   VM_EncOpcode<opcode>,
-      //   VM_EncOperand<"lhs", 0>,
-      //   VM_EncOperand<"rhs", 1>,
-      //   VM_EncResult<"result">,
-      // ];
-      OP_R_I32(4) = !iree_vm_ref_equal(&OP_R_REF(0), &OP_R_REF(2));
-      if (OP_R_REF_IS_MOVE(0)) iree_vm_ref_release(&OP_R_REF(0));
-      if (OP_R_REF_IS_MOVE(2)) iree_vm_ref_release(&OP_R_REF(2));
-      pc += kRegSize + kRegSize + kRegSize;
+    DISPATCH_OP(CORE, CmpNERef, {
+      bool lhs_is_move;
+      iree_vm_ref_t* lhs = VM_DecOperandRegRef("lhs", &lhs_is_move);
+      bool rhs_is_move;
+      iree_vm_ref_t* rhs = VM_DecOperandRegRef("rhs", &rhs_is_move);
+      int32_t* result = VM_DecResultRegI32("result");
+      *result = !iree_vm_ref_equal(lhs, rhs);
+      if (lhs_is_move) iree_vm_ref_release(lhs);
+      if (rhs_is_move) iree_vm_ref_release(rhs);
     });
-    DISPATCH_OP(CmpNZRef, {
-      // let encoding = [
-      //   VM_EncOpcode<opcode>,
-      //   VM_EncOperand<"operand", 0>,
-      //   VM_EncResult<"result">,
-      // ];
-      OP_R_I32(2) = OP_R_REF(0).ptr != NULL;
-      if (OP_R_REF_IS_MOVE(0)) iree_vm_ref_release(&OP_R_REF(0));
-      pc += kRegSize + kRegSize;
+    DISPATCH_OP(CORE, CmpNZRef, {
+      bool operand_is_move;
+      iree_vm_ref_t* operand = VM_DecOperandRegRef("operand", &operand_is_move);
+      int32_t* result = VM_DecResultRegI32("result");
+      *result = operand->ptr != NULL ? 1 : 0;
+      if (operand_is_move) iree_vm_ref_release(operand);
     });
 
     //===------------------------------------------------------------------===//
     // Control flow
     //===------------------------------------------------------------------===//
 
-    DISPATCH_OP(Branch, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_Branch>,
-      //   VM_EncBranch<"dest", "operands">,
-      // ];
-
-      int32_t block_pc = OP_I32(0);
+    DISPATCH_OP(CORE, Branch, {
+      int32_t block_pc = VM_DecBranchTarget("dest");
       const iree_vm_register_remap_list_t* remap_list =
-          (const iree_vm_register_remap_list_t*)&bytecode_data[pc + 4];
-      pc += 4 + kRegSize + remap_list->size * 2 * kRegSize;
+          VM_DecBranchOperands("operands");
       pc = block_pc;
       iree_vm_bytecode_dispatch_remap_branch_registers(regs, remap_list);
     });
 
-    DISPATCH_OP(CondBranch, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_CondBranch>,
-      //   VM_EncOperand<"condition", 0>,
-      //   VM_EncBranch<"getTrueDest", "getTrueOperands">,
-      //   VM_EncBranch<"getFalseDest", "getFalseOperands">,
-      // ];
-
-      int32_t cond_value = OP_R_I32(0);
-      int32_t true_block_pc = OP_I32(2);
+    DISPATCH_OP(CORE, CondBranch, {
+      int32_t condition = VM_DecOperandRegI32("condition");
+      int32_t true_block_pc = VM_DecBranchTarget("true_dest");
       const iree_vm_register_remap_list_t* true_remap_list =
-          (const iree_vm_register_remap_list_t*)&bytecode_data[pc + kRegSize +
-                                                               4];
-      pc += kRegSize + 4 + kRegSize + true_remap_list->size * 2 * kRegSize;
-      int32_t false_block_pc = OP_I32(0);
+          VM_DecBranchOperands("true_operands");
+      int32_t false_block_pc = VM_DecBranchTarget("false_dest");
       const iree_vm_register_remap_list_t* false_remap_list =
-          (const iree_vm_register_remap_list_t*)&bytecode_data[pc + 4];
-      pc += 4 + kRegSize + false_remap_list->size * 2 * kRegSize;
-
-      if (cond_value) {
+          VM_DecBranchOperands("false_operands");
+      if (condition) {
         pc = true_block_pc;
         iree_vm_bytecode_dispatch_remap_branch_registers(regs, true_remap_list);
       } else {
@@ -823,22 +570,12 @@ iree_status_t iree_vm_bytecode_dispatch(
       }
     });
 
-    DISPATCH_OP(Call, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_Call>,
-      //   VM_EncFuncAttr<"callee">,
-      //   VM_EncVariadicOperands<"operands">,
-      //   VM_EncVariadicResults<"results">,
-      // ];
-
-      // Get argument and result register lists and flush the caller frame.
-      int32_t function_ordinal = OP_I32(0);
+    DISPATCH_OP(CORE, Call, {
+      int32_t function_ordinal = VM_DecFuncAttr("callee");
       const iree_vm_register_list_t* src_reg_list =
-          (const iree_vm_register_list_t*)&bytecode_data[pc + 4];
-      pc += 4 + kRegSize + src_reg_list->size * kRegSize;
+          VM_DecVariadicOperands("operands");
       const iree_vm_register_list_t* dst_reg_list =
-          (const iree_vm_register_list_t*)&bytecode_data[pc];
-      pc += kRegSize + dst_reg_list->size * kRegSize;
+          VM_DecVariadicResults("results");
       current_frame->pc = pc;
 
       // NOTE: we assume validation has ensured these functions exist.
@@ -857,7 +594,8 @@ iree_status_t iree_vm_bytecode_dispatch(
             call.function.module->self, stack, &call, out_result);
         if (!iree_status_is_ok(call_status)) {
           // TODO(benvanik): set execution result to failure/capture stack.
-          return call_status;
+          return iree_status_annotate(
+              call_status, iree_make_cstring_view("while calling import"));
         }
       } else {
         // Switch execution to the target function and continue running in the
@@ -866,7 +604,7 @@ iree_status_t iree_vm_bytecode_dispatch(
         target_function.module = &module->interface;
         target_function.linkage = IREE_VM_FUNCTION_LINKAGE_INTERNAL;
         target_function.ordinal = function_ordinal;
-        const iree_vm_function_descriptor_t* target_descriptor =
+        const iree_vm_FunctionDescriptor_t* target_descriptor =
             &module->function_descriptor_table[function_ordinal];
         target_function.i32_register_count =
             target_descriptor->i32_register_count;
@@ -877,7 +615,9 @@ iree_status_t iree_vm_bytecode_dispatch(
             stack, target_function, src_reg_list, dst_reg_list, &current_frame);
         if (!iree_status_is_ok(enter_status)) {
           // TODO(benvanik): set execution result to stack overflow.
-          return enter_status;
+          return iree_status_annotate(
+              enter_status,
+              iree_make_cstring_view("while calling internal function"));
         }
         regs = current_frame->registers;
         bytecode_data =
@@ -886,30 +626,16 @@ iree_status_t iree_vm_bytecode_dispatch(
       }
     });
 
-    DISPATCH_OP(CallVariadic, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_CallVariadic>,
-      //   VM_EncFuncAttr<"callee">,
-      //   VM_EncIntArrayAttr<"segment_sizes", 16>,
-      //   VM_EncVariadicOperands<"operands">,
-      //   VM_EncVariadicResults<"results">,
-      // ];
-
+    DISPATCH_OP(CORE, CallVariadic, {
       // TODO(benvanik): dedupe with above or merge and always have the seg size
       // list be present (but empty) for non-variadic calls.
-
-      // Get argument and result register lists and flush the caller frame.
-      int32_t function_ordinal = OP_I32(0);
-      pc += 4;
+      int32_t function_ordinal = VM_DecFuncAttr("callee");
       const iree_vm_register_list_t* seg_size_list =
-          (const iree_vm_register_list_t*)&bytecode_data[pc];
-      pc += kRegSize + seg_size_list->size * kRegSize;
+          VM_DecVariadicOperands("segment_sizes");
       const iree_vm_register_list_t* src_reg_list =
-          (const iree_vm_register_list_t*)&bytecode_data[pc];
-      pc += kRegSize + src_reg_list->size * kRegSize;
+          VM_DecVariadicOperands("operands");
       const iree_vm_register_list_t* dst_reg_list =
-          (const iree_vm_register_list_t*)&bytecode_data[pc];
-      pc += kRegSize + dst_reg_list->size * kRegSize;
+          VM_DecVariadicResults("results");
       current_frame->pc = pc;
 
       // NOTE: we assume validation has ensured these functions exist.
@@ -917,7 +643,9 @@ iree_status_t iree_vm_bytecode_dispatch(
       int is_import = (function_ordinal & 0x80000000u) != 0;
       if (!is_import) {
         // Variadic calls are currently only supported for import functions.
-        return IREE_STATUS_FAILED_PRECONDITION;
+        return iree_make_status(
+            IREE_STATUS_FAILED_PRECONDITION,
+            "variadic calls only supported for internal callees");
       }
 
       // Import that we can fetch from the module state.
@@ -935,28 +663,25 @@ iree_status_t iree_vm_bytecode_dispatch(
           call.function.module->self, stack, &call, out_result);
       if (!iree_status_is_ok(call_status)) {
         // TODO(benvanik): set execution result to failure/capture stack.
-        return call_status;
+        return iree_status_annotate(
+            call_status,
+            iree_make_cstring_view("while calling variadic import"));
       }
     });
 
-    DISPATCH_OP(Return, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_Return>,
-      //   VM_EncVariadicOperands<"operands">,
-      // ];
-
-      // Remap registers from callee to caller.
+    DISPATCH_OP(CORE, Return, {
       const iree_vm_register_list_t* src_reg_list =
-          (const iree_vm_register_list_t*)&bytecode_data[pc];
-      current_frame->pc = pc + kRegSize + src_reg_list->size * kRegSize;
+          VM_DecVariadicOperands("operands");
+      current_frame->pc = pc;
 
       // Leave callee by cleaning up the stack.
-      iree_vm_stack_function_leave(stack, src_reg_list, &current_frame);
+      IREE_RETURN_IF_ERROR(
+          iree_vm_stack_function_leave(stack, src_reg_list, &current_frame));
 
       if (!current_frame || current_frame->depth < entry_frame_depth) {
         // Return from the top-level entry frame - return back to call().
         // TODO(benvanik): clear execution results.
-        return IREE_STATUS_OK;
+        return iree_ok_status();
       }
 
       // Reset dispatch state so we can continue executing in the caller.
@@ -968,109 +693,304 @@ iree_status_t iree_vm_bytecode_dispatch(
       pc = current_frame->pc;
     });
 
-    DISPATCH_OP(Fail, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_Fail>,
-      //   VM_EncOperand<"status", 0>,
-      //   VM_EncStrAttr<"message">,
-      // ];
-      uint32_t status_code = OP_R_I32(0);
-      iree_string_view_t str;
-      str.size = OP_I16(2);
-      str.data = (const char*)&bytecode_data[pc + 2 + 2];
-      pc += 2 + 2 + str.size;
-      // TODO(benvanik): attach string and stack.
-      if (status_code == 0) {
-        // Shouldn't happen; we expect to die here, so there's no way to no-op.
-        return IREE_STATUS_INVALID_ARGUMENT;
+    DISPATCH_OP(CORE, Fail, {
+      uint32_t status_code = VM_DecOperandRegI32("status");
+      iree_string_view_t message;
+      VM_DecStrAttr("message", &message);
+      if (status_code != 0) {
+        // TODO(benvanik): capture source information.
+        return iree_status_allocate(status_code, "<vm>", 0, message);
       }
-      return iree_make_status(status_code);
     });
 
     //===------------------------------------------------------------------===//
     // Async/fiber ops
     //===------------------------------------------------------------------===//
 
-    DISPATCH_OP(Yield, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_Yield>,
-      // ];
+    DISPATCH_OP(CORE, Yield, {
       // TODO(benvanik): yield with execution results.
-      return IREE_STATUS_OK;
+      return iree_ok_status();
     });
 
     //===------------------------------------------------------------------===//
     // Debugging
     //===------------------------------------------------------------------===//
 
-    DISPATCH_OP(Trace, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_Trace>,
-      //   VM_EncStrAttr<"event_name">,
-      //   VM_EncVariadicOperands<"operands">,
-      // ];
-      iree_string_view_t str;
-      str.size = OP_I16(0);
-      str.data = (const char*)&bytecode_data[pc + 2];
-      pc += 2 + str.size;
+    DISPATCH_OP(CORE, Trace, {
+      iree_string_view_t event_name;
+      VM_DecStrAttr("event_name", &event_name);
       const iree_vm_register_list_t* src_reg_list =
-          (const iree_vm_register_list_t*)&bytecode_data[pc];
-      pc += kRegSize + src_reg_list->size * kRegSize;
+          VM_DecVariadicOperands("operands");
       // TODO(benvanik): trace (if enabled).
       iree_vm_bytecode_dispatch_discard_registers(regs, src_reg_list);
     });
 
-    DISPATCH_OP(Print, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_Print>,
-      //   VM_EncStrAttr<"message">,
-      //   VM_EncVariadicOperands<"operands">,
-      // ];
-      iree_string_view_t str;
-      str.size = OP_I16(0);
-      str.data = (const char*)&bytecode_data[pc + 2];
-      pc += 2 + str.size;
+    DISPATCH_OP(CORE, Print, {
+      iree_string_view_t event_name;
+      VM_DecStrAttr("event_name", &event_name);
       const iree_vm_register_list_t* src_reg_list =
-          (const iree_vm_register_list_t*)&bytecode_data[pc];
-      pc += kRegSize + src_reg_list->size * kRegSize;
+          VM_DecVariadicOperands("operands");
       // TODO(benvanik): print.
       iree_vm_bytecode_dispatch_discard_registers(regs, src_reg_list);
     });
 
-    DISPATCH_OP(Break, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_Break>,
-      //   VM_EncBranch<"dest", "operands">,
-      // ];
+    DISPATCH_OP(CORE, Break, {
       // TODO(benvanik): break unconditionally.
-      int32_t block_pc = OP_I32(0);
+      int32_t block_pc = VM_DecBranchTarget("dest");
       const iree_vm_register_remap_list_t* remap_list =
-          (const iree_vm_register_remap_list_t*)&bytecode_data[pc + 4];
-      pc += 4 + kRegSize + remap_list->size * 2 * kRegSize;
+          VM_DecBranchOperands("operands");
       iree_vm_bytecode_dispatch_remap_branch_registers(regs, remap_list);
       pc = block_pc;
     });
 
-    DISPATCH_OP(CondBreak, {
-      // let encoding = [
-      //   VM_EncOpcode<VM_OPC_CondBreak>,
-      //   VM_EncBranch<"dest", "operands">,
-      // ];
-      int32_t cond_value = OP_R_I32(0);
-      if (cond_value) {
+    DISPATCH_OP(CORE, CondBreak, {
+      int32_t condition = VM_DecOperandRegI32("condition");
+      if (condition) {
         // TODO(benvanik): cond break.
       }
-      int32_t block_pc = OP_I32(2);
+      int32_t block_pc = VM_DecBranchTarget("dest");
       const iree_vm_register_remap_list_t* remap_list =
-          (const iree_vm_register_remap_list_t*)&bytecode_data[pc + kRegSize +
-                                                               4];
-      pc += kRegSize + 4 + kRegSize + remap_list->size * 2 * kRegSize;
+          VM_DecBranchOperands("operands");
       iree_vm_bytecode_dispatch_remap_branch_registers(regs, remap_list);
       pc = block_pc;
     });
 
+    //===------------------------------------------------------------------===//
+    // Extension trampolines
+    //===------------------------------------------------------------------===//
+
+    BEGIN_DISPATCH_PREFIX(PrefixExtI64, EXT_I64) {
+#if IREE_VM_EXT_I64_ENABLE
+      //===----------------------------------------------------------------===//
+      // ExtI64: Globals
+      //===----------------------------------------------------------------===//
+
+      DISPATCH_OP(EXT_I64, GlobalLoadI64, {
+        int32_t byte_offset = VM_DecGlobalAttr("global");
+        if (byte_offset < 0 ||
+            byte_offset >= module_state->rwdata_storage.data_length) {
+          return iree_make_status(
+              IREE_STATUS_OUT_OF_RANGE,
+              "global byte_offset out of range: %d (rwdata=%zu)", byte_offset,
+              module_state->rwdata_storage.data_length);
+        }
+        int64_t* value = VM_DecResultRegI64("value");
+        const int64_t* global_ptr =
+            (const int64_t*)(module_state->rwdata_storage.data + byte_offset);
+        *value = *global_ptr;
+      });
+
+      DISPATCH_OP(EXT_I64, GlobalStoreI64, {
+        int32_t byte_offset = VM_DecGlobalAttr("global");
+        if (byte_offset < 0 ||
+            byte_offset >= module_state->rwdata_storage.data_length) {
+          return iree_make_status(
+              IREE_STATUS_OUT_OF_RANGE,
+              "global byte_offset out of range: %d (rwdata=%zu)", byte_offset,
+              module_state->rwdata_storage.data_length);
+        }
+        int64_t value = VM_DecOperandRegI64("value");
+        int64_t* global_ptr =
+            (int64_t*)(module_state->rwdata_storage.data + byte_offset);
+        *global_ptr = value;
+      });
+
+      DISPATCH_OP(EXT_I64, GlobalLoadIndirectI64, {
+        int32_t byte_offset = VM_DecOperandRegI32("global");
+        if (byte_offset < 0 ||
+            byte_offset >= module_state->rwdata_storage.data_length) {
+          return iree_make_status(
+              IREE_STATUS_OUT_OF_RANGE,
+              "global byte_offset out of range: %d (rwdata=%zu)", byte_offset,
+              module_state->rwdata_storage.data_length);
+        }
+        int64_t* value = VM_DecResultRegI64("value");
+        const int64_t* global_ptr =
+            (const int64_t*)(module_state->rwdata_storage.data + byte_offset);
+        *value = *global_ptr;
+      });
+
+      DISPATCH_OP(EXT_I64, GlobalStoreIndirectI64, {
+        int32_t byte_offset = VM_DecOperandRegI32("global");
+        if (byte_offset < 0 ||
+            byte_offset >= module_state->rwdata_storage.data_length) {
+          return iree_make_status(
+              IREE_STATUS_OUT_OF_RANGE,
+              "global byte_offset out of range: %d (rwdata=%zu)", byte_offset,
+              module_state->rwdata_storage.data_length);
+        }
+        int64_t value = VM_DecOperandRegI64("value");
+        int64_t* global_ptr =
+            (int64_t*)(module_state->rwdata_storage.data + byte_offset);
+        *global_ptr = value;
+      });
+
+      //===----------------------------------------------------------------===//
+      // ExtI64: Constants
+      //===----------------------------------------------------------------===//
+
+      DISPATCH_OP(EXT_I64, ConstI64, {
+        int64_t value = VM_DecIntAttr64("value");
+        int64_t* result = VM_DecResultRegI64("result");
+        *result = value;
+      });
+
+      DISPATCH_OP(EXT_I64, ConstI64Zero, {
+        int64_t* result = VM_DecResultRegI64("result");
+        *result = 0;
+      });
+
+      //===----------------------------------------------------------------===//
+      // ExtI64: Lists
+      //===----------------------------------------------------------------===//
+
+      DISPATCH_OP(EXT_I64, ListGetI64, {
+        bool list_is_move;
+        iree_vm_ref_t* list_ref = VM_DecOperandRegRef("list", &list_is_move);
+        iree_vm_list_t* list = iree_vm_list_deref(list_ref);
+        if (!list) return iree_make_status(IREE_STATUS_INVALID_ARGUMENT);
+        int32_t index = VM_DecOperandRegI32("index");
+        int64_t* result = VM_DecResultRegI64("result");
+        iree_vm_value_t value;
+        IREE_RETURN_IF_ERROR(iree_vm_list_get_value_as(
+            list, index, IREE_VM_VALUE_TYPE_I64, &value));
+        *result = value.i32;
+      });
+
+      DISPATCH_OP(EXT_I64, ListSetI64, {
+        bool list_is_move;
+        iree_vm_ref_t* list_ref = VM_DecOperandRegRef("list", &list_is_move);
+        iree_vm_list_t* list = iree_vm_list_deref(list_ref);
+        if (!list) return iree_make_status(IREE_STATUS_INVALID_ARGUMENT);
+        int32_t index = VM_DecOperandRegI32("index");
+        int64_t raw_value = VM_DecOperandRegI64("value");
+        iree_vm_value_t value = iree_vm_value_make_i64(raw_value);
+        IREE_RETURN_IF_ERROR(iree_vm_list_set_value(list, index, &value));
+      });
+
+      //===----------------------------------------------------------------===//
+      // ExtI64: Conditional assignment
+      //===----------------------------------------------------------------===//
+
+      DISPATCH_OP(EXT_I64, SelectI64, {
+        int32_t condition = VM_DecOperandRegI32("condition");
+        int64_t true_value = VM_DecOperandRegI64("true_value");
+        int64_t false_value = VM_DecOperandRegI64("false_value");
+        int64_t* result = VM_DecResultRegI64("result");
+        *result = condition ? true_value : false_value;
+      });
+
+      DISPATCH_OP(EXT_I64, SwitchI64, {
+        int32_t index = VM_DecOperandRegI32("index");
+        int64_t default_value = VM_DecIntAttr64("default_value");
+        const iree_vm_register_list_t* value_reg_list =
+            VM_DecVariadicOperands("values");
+        int64_t* result = VM_DecResultRegI64("result");
+        if (index >= 0 && index < value_reg_list->size) {
+          *result =
+              regs.i32[value_reg_list->registers[index] & (regs.i32_mask & ~1)];
+        } else {
+          *result = default_value;
+        }
+      });
+
+      //===----------------------------------------------------------------===//
+      // ExtI64: Native integer arithmetic
+      //===----------------------------------------------------------------===//
+
+#define DISPATCH_OP_EXT_I64_UNARY_ALU_I64(op_name, type, op) \
+  DISPATCH_OP(EXT_I64, op_name, {                            \
+    int64_t operand = VM_DecOperandRegI64("operand");        \
+    int64_t* result = VM_DecResultRegI64("result");          \
+    *result = (int64_t)(op((type)operand));                  \
+  });
+
+#define DISPATCH_OP_EXT_I64_BINARY_ALU_I64(op_name, type, op) \
+  DISPATCH_OP(EXT_I64, op_name, {                             \
+    int64_t lhs = VM_DecOperandRegI64("lhs");                 \
+    int64_t rhs = VM_DecOperandRegI64("rhs");                 \
+    int64_t* result = VM_DecResultRegI64("result");           \
+    *result = (int64_t)(((type)lhs)op((type)rhs));            \
+  });
+
+      DISPATCH_OP_EXT_I64_BINARY_ALU_I64(AddI64, int64_t, +);
+      DISPATCH_OP_EXT_I64_BINARY_ALU_I64(SubI64, int64_t, -);
+      DISPATCH_OP_EXT_I64_BINARY_ALU_I64(MulI64, int64_t, *);
+      DISPATCH_OP_EXT_I64_BINARY_ALU_I64(DivI64S, int64_t, /);
+      DISPATCH_OP_EXT_I64_BINARY_ALU_I64(DivI64U, uint64_t, /);
+      DISPATCH_OP_EXT_I64_BINARY_ALU_I64(RemI64S, int64_t, %);
+      DISPATCH_OP_EXT_I64_BINARY_ALU_I64(RemI64U, uint64_t, %);
+      DISPATCH_OP_EXT_I64_UNARY_ALU_I64(NotI64, uint64_t, ~);
+      DISPATCH_OP_EXT_I64_BINARY_ALU_I64(AndI64, uint64_t, &);
+      DISPATCH_OP_EXT_I64_BINARY_ALU_I64(OrI64, uint64_t, |);
+      DISPATCH_OP_EXT_I64_BINARY_ALU_I64(XorI64, uint64_t, ^);
+
+      //===----------------------------------------------------------------===//
+      // ExtI64: Casting and type conversion/emulation
+      //===----------------------------------------------------------------===//
+
+#define DISPATCH_OP_EXT_I64_CAST_I64(op_name, src_type, dst_type) \
+  DISPATCH_OP(EXT_I64, op_name, {                                 \
+    int64_t operand = VM_DecOperandRegI64("operand");             \
+    int64_t* result = VM_DecResultRegI64("result");               \
+    *result = (dst_type)((src_type)operand);                      \
+  });
+
+      DISPATCH_OP_EXT_I64_CAST_I64(TruncI64I32, uint64_t, uint32_t);
+      DISPATCH_OP_EXT_I64_CAST_I64(ExtI32I64S, int32_t, int64_t);
+      DISPATCH_OP_EXT_I64_CAST_I64(ExtI32I64U, uint32_t, uint64_t);
+
+      //===----------------------------------------------------------------===//
+      // ExtI64: Native bitwise shifts and rotates
+      //===----------------------------------------------------------------===//
+
+#define DISPATCH_OP_EXT_I64_SHIFT_I64(op_name, type, op) \
+  DISPATCH_OP(EXT_I64, op_name, {                        \
+    int64_t operand = VM_DecOperandRegI64("operand");    \
+    int8_t amount = VM_DecConstI8("amount");             \
+    int64_t* result = VM_DecResultRegI64("result");      \
+    *result = (int64_t)(((type)operand)op amount);       \
+  });
+
+      DISPATCH_OP_EXT_I64_SHIFT_I64(ShlI64, int64_t, <<);
+      DISPATCH_OP_EXT_I64_SHIFT_I64(ShrI64S, int64_t, >>);
+      DISPATCH_OP_EXT_I64_SHIFT_I64(ShrI64U, uint64_t, >>);
+
+      //===----------------------------------------------------------------===//
+      // ExtI64: Comparison ops
+      //===----------------------------------------------------------------===//
+
+#define DISPATCH_OP_EXT_I64_CMP_I64(op_name, type, op) \
+  DISPATCH_OP(EXT_I64, op_name, {                      \
+    int64_t lhs = VM_DecOperandRegI64("lhs");          \
+    int64_t rhs = VM_DecOperandRegI64("rhs");          \
+    int32_t* result = VM_DecResultRegI32("result");    \
+    *result = (((type)lhs)op((type)rhs)) ? 1 : 0;      \
+  });
+
+      DISPATCH_OP_EXT_I64_CMP_I64(CmpEQI64, int64_t, ==);
+      DISPATCH_OP_EXT_I64_CMP_I64(CmpNEI64, int64_t, !=);
+      DISPATCH_OP_EXT_I64_CMP_I64(CmpLTI64S, int64_t, <);
+      DISPATCH_OP_EXT_I64_CMP_I64(CmpLTI64U, uint64_t, <);
+      DISPATCH_OP(EXT_I64, CmpNZI64, {
+        int64_t operand = VM_DecOperandRegI64("operand");
+        int32_t* result = VM_DecResultRegI32("result");
+        *result = (operand != 0) ? 1 : 0;
+      });
+#else
+      return iree_make_status(IREE_STATUS_UNIMPLEMENTED);
+#endif  // IREE_VM_EXT_I64_ENABLE
+    }
+    END_DISPATCH_PREFIX();
+
+    DISPATCH_OP(CORE, PrefixExtF32,
+                { return iree_make_status(IREE_STATUS_UNIMPLEMENTED); });
+
+    DISPATCH_OP(CORE, PrefixExtF64,
+                { return iree_make_status(IREE_STATUS_UNIMPLEMENTED); });
+
     // NOLINTNEXTLINE(misc-static-assert)
-    DISPATCH_UNHANDLED();
+    DISPATCH_UNHANDLED_CORE();
   }
-  END_DISPATCH();
+  END_DISPATCH_CORE();
 }

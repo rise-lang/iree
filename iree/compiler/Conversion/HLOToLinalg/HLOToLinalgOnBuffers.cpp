@@ -21,13 +21,13 @@
 //===----------------------------------------------------------------------===//
 
 #include <cstddef>
-#include <iostream>
 
 #include "iree/compiler/Conversion/HLOToLinalg/Passes.h"
 #include "iree/compiler/Dialect/HAL/IR/HALOps.h"
 #include "iree/compiler/Dialect/IREE/IR/IREEOps.h"
 #include "iree/compiler/Dialect/Shape/IR/ShapeOps.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "mlir/Dialect/Linalg/IR/LinalgOps.h"
@@ -53,6 +53,8 @@
 namespace mlir {
 namespace iree_compiler {
 
+using OutputBufferMap = DenseMap<Operation *, Value>;
+
 // -----------------------------------------------------------------------------
 // Utility functions.
 // -----------------------------------------------------------------------------
@@ -70,10 +72,11 @@ static Attribute getInitValueAsConst(Value init) {
   if (!matchPattern(init, m_Constant(&attr))) return {};
   auto type = attr.getType().dyn_cast<ShapedType>();
   if (!type || type.getRank() != 0) return {};
-  if (auto intType = type.getElementType().dyn_cast<IntegerType>())
+  if (auto intType = type.getElementType().dyn_cast<IntegerType>()) {
     return IntegerAttr::get(intType, attr.getValue<APInt>({}));
-  else if (auto floatType = type.getElementType().dyn_cast<FloatType>())
+  } else if (auto floatType = type.getElementType().dyn_cast<FloatType>()) {
     return FloatAttr::get(floatType, attr.getValue<APFloat>({}));
+  }
   return {};
 }
 
@@ -258,14 +261,17 @@ static DotOperationType getDotOperationType(mhlo::DotOp dotOp) {
            a == b;
   };
   if (lhsShape.size() == 1 && rhsShape.size() == 1 &&
-      shapeMatches(lhsShape[0], rhsShape[0]))
+      shapeMatches(lhsShape[0], rhsShape[0])) {
     return DotOperationType::VectorDot;
+  }
   if (lhsShape.size() == 2 && rhsShape.size() == 1 &&
-      shapeMatches(lhsShape[1], rhsShape[0]))
+      shapeMatches(lhsShape[1], rhsShape[0])) {
     return DotOperationType::MatrixVector;
+  }
   if (rhsShape.size() == 2 && rhsShape.size() == 2 &&
-      shapeMatches(lhsShape[1], rhsShape[0]))
+      shapeMatches(lhsShape[1], rhsShape[0])) {
     return DotOperationType::MatrixMatrix;
+  }
   return DotOperationType::Unsupported;
 }
 
@@ -324,6 +330,7 @@ struct RiseDotOpConversion
         OpBuilder builder(op);
         edsc::ScopedContext scope(builder, op.getLoc());
 
+
         mlir::edsc::highlevel::makeRiseProgram(
             resultBuffers[0], inputBuffers[0],
             inputBuffers[1])([&](Value A, Value B) {
@@ -334,6 +341,64 @@ struct RiseDotOpConversion
       return success();
     }
     return failure();
+  }
+};
+}  // namespace
+
+//===----------------------------------------------------------------------===//
+// mhlo.dot_general conversion patterns.
+//===----------------------------------------------------------------------===//
+
+namespace {
+/// Converts mhlo.dot_general operation to linalg.batchmatmul op
+struct DotGeneralOpConversion
+    : public ConvertToLinalgBufferOp<DotGeneralOpConversion,
+                                     mhlo::DotGeneralOp> {
+  using ConvertToLinalgBufferOp<DotGeneralOpConversion,
+                                mhlo::DotGeneralOp>::ConvertToLinalgBufferOp;
+  LogicalResult apply(mhlo::DotGeneralOp op, ArrayRef<Value> inputBuffers,
+                      ArrayRef<Value> resultBuffers,
+                      ConversionPatternRewriter &rewriter) const {
+    auto extract1DVector = [](DenseIntElementsAttr elements) {
+      SmallVector<int64_t, 6> ret;
+      for (const APInt &element : elements) {
+        ret.push_back(element.getLimitedValue());
+      }
+      return ret;
+    };
+    mhlo::DotDimensionNumbers dimNumbers = op.dot_dimension_numbers();
+    auto lhsBatchingDims =
+        extract1DVector(dimNumbers.lhs_batching_dimensions());
+    auto rhsBatchingDims =
+        extract1DVector(dimNumbers.rhs_batching_dimensions());
+    auto lhsContractingDims =
+        extract1DVector(dimNumbers.lhs_contracting_dimensions());
+    auto rhsContractingDims =
+        extract1DVector(dimNumbers.rhs_contracting_dimensions());
+    if (lhsBatchingDims.size() != 1 || lhsBatchingDims[0] != 0) {
+      return rewriter.notifyMatchFailure(
+          op, "expected lhs batching dimensions exactly {0}");
+    }
+    if (rhsBatchingDims.size() != 1 || rhsBatchingDims[0] != 0) {
+      return rewriter.notifyMatchFailure(
+          op, "expected rhs batching dimensions exactly {0}");
+    }
+    if (lhsContractingDims.size() != 1 || lhsContractingDims[0] != 2) {
+      return rewriter.notifyMatchFailure(
+          op, "expected lhs contracting dimensions exactly {2}");
+    }
+    if (rhsContractingDims.size() != 1 || rhsContractingDims[0] != 1) {
+      return rewriter.notifyMatchFailure(
+          op, "expected rhs contracting dimensions exactly {1}");
+    }
+    if (failed(zeroFillBuffer(op.getLoc(), resultBuffers[0], rewriter))) {
+      return rewriter.notifyMatchFailure(op,
+                                         "failed to zero fill result buffer");
+    }
+    rewriter.create<linalg::BatchMatmulOp>(
+        op.getLoc(), TypeRange{},
+        ValueRange{inputBuffers[0], inputBuffers[1], resultBuffers[0]});
+    return success();
   }
 };
 }  // namespace
@@ -410,7 +475,7 @@ LogicalResult RiseConvOpConversion::apply(
     auto range = windowStrides->getAttributeValues();
     strides.append(range.begin(), range.end());
   }
-  auto stridesArg = ArrayAttr::get(strides, op.getContext());
+//  auto stridesArg = ArrayAttr::get(strides, op.getContext());
 
   // TODO(ataei): Only support dilated convolution for now. We need to consider
   // LHS dilation for deconvolution cases.
@@ -419,7 +484,7 @@ LogicalResult RiseConvOpConversion::apply(
     auto range = rhsDilation->getAttributeValues();
     dilation.append(range.begin(), range.end());
   }
-  auto dilationArg = ArrayAttr::get(dilation, op.getContext());
+//  auto dilationArg = ArrayAttr::get(dilation, op.getContext());
 
   // Set padding only if it is non-zero.
   DenseIntElementsAttr padding = op.paddingAttr();
@@ -494,20 +559,20 @@ LogicalResult ConvOpConversion::apply(
     // batch_count, spatial_dims..., input_feature_count.
     if (dimensionNumbers.input_batch_dimension().getInt() != 0 ||
         dimensionNumbers.input_feature_dimension().getInt() !=
-            (inputSpatialRank + 1))
-      return failure();  //
+            (inputSpatialRank + 1)) {
+      return failure();
+    }
 
     const int kernelSpatialRank =
         llvm::size(dimensionNumbers.kernel_spatial_dimensions());
     // The dimensions for filter should follow the order of
     // spatial_dims..., input_feature_count, num_output_feature_count.
-    const int kernelOutputFeatureDim =
-        dimensionNumbers.kernel_output_feature_dimension().getInt();
     if (dimensionNumbers.kernel_input_feature_dimension().getInt() !=
             kernelSpatialRank ||
         dimensionNumbers.kernel_output_feature_dimension().getInt() !=
-            (kernelSpatialRank + 1))
+            (kernelSpatialRank + 1)) {
       return failure();
+    }
 
     const int outputSpatialRank =
         llvm::size(dimensionNumbers.output_spatial_dimensions());
@@ -515,12 +580,14 @@ LogicalResult ConvOpConversion::apply(
     // batch_count, spatial_dims.., output_feature_count.
     if (dimensionNumbers.output_batch_dimension().getInt() != 0 ||
         dimensionNumbers.output_feature_dimension().getInt() !=
-            (outputSpatialRank + 1))
+            (outputSpatialRank + 1)) {
       return failure();
+    }
 
     if (inputSpatialRank != outputSpatialRank ||
-        inputSpatialRank != kernelSpatialRank)
+        inputSpatialRank != kernelSpatialRank) {
       return failure();
+    }
 
     auto inputSpatialDim = dimensionNumbers.input_spatial_dimensions().begin();
     auto kernelSpatialDim =
@@ -532,8 +599,9 @@ LogicalResult ConvOpConversion::apply(
       const int dim = i + 1;
       if ((*inputSpatialDim++).getZExtValue() != dim ||
           (*outputSpatialDim++).getZExtValue() != dim ||
-          (*kernelSpatialDim++).getZExtValue() != i)
+          (*kernelSpatialDim++).getZExtValue() != i) {
         return failure();
+      }
     }
   }
 
@@ -544,7 +612,7 @@ LogicalResult ConvOpConversion::apply(
   }
   auto stridesArg = ArrayAttr::get(strides, op.getContext());
 
-  // TODO(ataei): Only support dilated convolution for now. We need to
+  // TODO(ataei): Only support dilated convolution for now. We need to consider
   // LHS dilation for deconvolution cases.
   llvm::SmallVector<Attribute, 4> dilation;
   if (auto rhsDilation = op.rhs_dilation()) {
@@ -565,9 +633,104 @@ LogicalResult ConvOpConversion::apply(
     rewriter.notifyMatchFailure(op, "failed to zero fill result buffer");
     return failure();
   }
-  rewriter.create<linalg::ConvOp>(op.getLoc(), inputBuffers[1], inputBuffers[0],
-                                  resultBuffers[0], stridesArg, dilationArg,
-                                  padding);
+
+  ShapedType filterShapeType =
+      op.rhs().getType().dyn_cast_or_null<ShapedType>();
+  if (!filterShapeType) return failure();
+  auto shape = filterShapeType.getShape();
+  auto numGroups =
+      shape[op.dimension_numbers().kernel_input_feature_dimension().getInt()];
+  auto groupSize =
+      shape[op.dimension_numbers().kernel_output_feature_dimension().getInt()];
+  // Depthwise conv path...
+  if (op.feature_group_count().getZExtValue() > 1u &&
+      op.feature_group_count().getZExtValue() == numGroups) {
+    // Lowering depthwise convolution to linalg.generic op. The idea is to use
+    // the group convolution formulation to perform the separable depthwise
+    // convolution as the following, given an n-dimensional input x and filter w
+    // the direct convolution operation can be written as:
+    //  y[n, d1, d2, ....dn, ci * groupSize + co] = sum(k1, k2, ....kn,
+    // x[n, d1 * stride1 + k1, d1 * stride2 + k2, ...dn * striden + kn]
+    // * w[k1, k2, ...kn, ci, co])
+
+    // TODO(ataei): Support dilation.
+    if (llvm::any_of(dilation, [](Attribute attr) {
+          return (attr.dyn_cast<IntegerAttr>().getInt() != 1);
+        })) {
+      return failure();
+    }
+
+    SmallVector<AffineExpr, 4> inputExprs;
+    SmallVector<AffineExpr, 4> filterExprs;
+    SmallVector<AffineExpr, 4> outputExprs;
+
+    const auto spatialDims =
+        llvm::size(op.dimension_numbers().input_spatial_dimensions());
+    const int d1Index = 1;
+    const int coIndex = d1Index + spatialDims;
+    const int ciIndex = coIndex + 1;
+    const int k1Index = ciIndex + 1;
+    // n, d1 * stride1 + k1, d1 * stride2 + k2, ...dn * striden + kn
+    inputExprs.push_back(rewriter.getAffineDimExpr(0));
+    for (int i = 0; i < spatialDims; ++i) {
+      if (op.window_stridesAttr()) {
+        auto stride = op.window_stridesAttr().getValue<APInt>(i);
+        inputExprs.push_back(rewriter.getAffineDimExpr(d1Index + i) *
+                                 stride.getZExtValue() +
+                             rewriter.getAffineDimExpr(k1Index + i));
+      } else {
+        inputExprs.push_back(rewriter.getAffineDimExpr(d1Index + i) +
+                             rewriter.getAffineDimExpr(k1Index + i));
+      }
+    }
+    inputExprs.push_back(rewriter.getAffineDimExpr(ciIndex));
+
+    // k1, k2, ...kn, ci, co
+    for (int i = 0; i < spatialDims; ++i) {
+      filterExprs.push_back(rewriter.getAffineDimExpr(k1Index + i));
+    }
+    filterExprs.push_back(rewriter.getAffineDimExpr(ciIndex));
+    filterExprs.push_back(rewriter.getAffineDimExpr(coIndex));
+
+    // n, d1, d2, ....dn, ci * groupSize + co
+    outputExprs.push_back(rewriter.getAffineDimExpr(0));
+    for (int i = 0; i < spatialDims; ++i) {
+      outputExprs.push_back(rewriter.getAffineDimExpr(d1Index + i));
+    }
+    outputExprs.push_back(rewriter.getAffineDimExpr(ciIndex) * groupSize +
+                          rewriter.getAffineDimExpr(coIndex));
+
+    // nloops = |d| + |k| + |{n, ci, co}|
+    int nloops = spatialDims * 2 + 3;
+    SmallVector<AffineMap, 4> indexingMaps;
+    indexingMaps.emplace_back(AffineMap::get(
+        nloops, /*symbolCount=*/0, inputExprs, rewriter.getContext()));
+    indexingMaps.emplace_back(AffineMap::get(
+        nloops, /*symbolCount=*/0, filterExprs, rewriter.getContext()));
+    indexingMaps.emplace_back(AffineMap::get(
+        nloops, /*symbolCount=*/0, outputExprs, rewriter.getContext()));
+
+    Location loc = op.getLoc();
+    SmallVector<Value, 4> linalgOpArgs = {inputBuffers[0], inputBuffers[1],
+                                          resultBuffers[0]};
+
+    SmallVector<StringRef, 3> loopAttributeTypes(spatialDims + 3, "parallel");
+    loopAttributeTypes.append(spatialDims, "reduction");
+    rewriter.create<linalg::GenericOp>(
+        loc, ArrayRef<Type>{}, linalgOpArgs,
+        2,  // args_in
+        1,  // args_out
+        indexingMaps, loopAttributeTypes,
+        [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange args) {
+          Value mul = nestedBuilder.create<MulFOp>(nestedLoc, args[0], args[1]);
+          Value add = nestedBuilder.create<AddFOp>(nestedLoc, mul, args[2]);
+          nestedBuilder.create<linalg::YieldOp>(loc, add);
+        });
+  } else {
+    rewriter.create<linalg::ConvOp>(op.getLoc(), inputBuffers[1],
+                                    inputBuffers[0], resultBuffers[0],
+                                    stridesArg, dilationArg, padding);
+  }
   return success();
 }
 
@@ -626,7 +789,7 @@ LogicalResult ConcatenateOpConversion::apply(
       rewriter.getI64IntegerAttr(1),                    // args_out
       rewriter.getArrayAttr(indexingMaps),
       getParallelAndReductionIterAttrs(rewriter, nloops, nonParallelLoops),
-      /*doc=*/nullptr, /*library_call=*/nullptr);
+      /*doc=*/nullptr, /*library_call=*/nullptr, /*symbol_source=*/nullptr);
 
   // Add a block to the region.
   auto *region = &linalgOp.region();
@@ -690,26 +853,9 @@ struct PadOpConversion
 };
 }  // namespace
 
-/// Returns an AffineMapAttr that is the indexing map to use for the input of a
-/// mhlo.pad `op`.
-static AffineMapAttr getPadOpInputIndexingMap(
-    mhlo::PadOp op, int rank, ConversionPatternRewriter &rewriter) {
-  const auto edgePaddingLow = convertDenseIntAttr(op.edge_padding_low());
-  SmallVector<AffineExpr, 4> exprs;
-  for (int i = 0; i < rank; ++i)
-    exprs.push_back((rewriter.getAffineDimExpr(i) - edgePaddingLow[i]));
-  return AffineMapAttr::get(
-      AffineMap::get(rank, /*symbolCount=*/0, exprs, rewriter.getContext()));
-}
-
 LogicalResult PadOpConversion::apply(
     mhlo::PadOp op, ArrayRef<Value> inputBuffers, ArrayRef<Value> resultBuffers,
     ConversionPatternRewriter &rewriter) const {
-  if (llvm::any_of(op.interior_padding().getValues<IntegerAttr>(),
-                   [](auto attr) { return attr.getInt() != 0; }))
-    return op.emitError(
-        "pad op with non-zero interiror_padding is not supported");
-
   mhlo::PadOp::Adaptor adaptor(inputBuffers);
   auto loc = op.getLoc();
 
@@ -717,84 +863,34 @@ LogicalResult PadOpConversion::apply(
   Value paddingVal =
       paddingConstVal
           ? rewriter.create<ConstantOp>(loc, paddingConstVal).getResult()
-          : adaptor.padding_value();
+          : rewriter.create<LoadOp>(loc, adaptor.padding_value());
 
-  auto operandType = adaptor.operand().getType().cast<ShapedType>();
-  int rank = operandType.getRank();
-
-  SmallVector<Attribute, 2> indexingMaps;
-  indexingMaps.emplace_back(getPadOpInputIndexingMap(op, rank, rewriter));
-  if (!paddingConstVal) {
-    indexingMaps.emplace_back(AffineMapAttr::get(
-        AffineMap::get(rank, /*symbolCount=*/0, rewriter.getContext())));
-  }
-  indexingMaps.emplace_back(AffineMapAttr::get(
-      AffineMap::getMultiDimIdentityMap(rank, rewriter.getContext())));
-
-  SmallVector<Type, 2> resultTypes = {};
-  SmallVector<Value, 2> linalgOpArgs = {adaptor.operand()};
-  if (!paddingConstVal) linalgOpArgs.push_back(adaptor.padding_value());
-  linalgOpArgs.push_back(resultBuffers[0]);
-  auto linalgOp = rewriter.create<linalg::IndexedGenericOp>(
-      loc, resultTypes, linalgOpArgs,
-      rewriter.getI64IntegerAttr(linalgOpArgs.size() - 1),  // args_in
-      rewriter.getI64IntegerAttr(1),                        // args_out
-      rewriter.getArrayAttr(indexingMaps),
-      getParallelAndReductionIterAttrs(rewriter, rank, /*nReduction=*/0),
-      /*doc=*/nullptr, /*library_call=*/nullptr);
-
-  // Add a block to the region.
-  auto *region = &linalgOp.region();
-  auto *block = rewriter.createBlock(region, region->end());
-  SmallVector<Type, 4> bodyArgTypes;
-  bodyArgTypes.append(rank, rewriter.getIndexType());
-  bodyArgTypes.append(linalgOpArgs.size(), operandType.getElementType());
-  block->addArguments(bodyArgTypes);
-  rewriter.setInsertionPointToEnd(block);
-
-  // If the `index` of the result at a particular dimension i, is d_i, check if
-  //
-  // (d_i >= edge_padding_low[i]) &&
-  // (d_i < (edge_padding_low[i] + operand_shape[i])).
-  //
-  // If true, then use the value of the operand, otherwise use the padding
-  // value.
   const auto &edgePaddingLow = op.edge_padding_low();
-  const auto &edgePaddingHigh = op.edge_padding_high();
-
-  Type indexType = rewriter.getIndexType();
-  Value cond = nullptr;
-  auto applyAndOp = [&](Value val) {
-    cond = cond ? rewriter.create<AndOp>(loc, cond, val) : val;
-  };
-  for (int i = 0; i < rank; ++i) {
-    Value dim = block->getArgument(i);
-    int64_t paddingLow = edgePaddingLow.getValue<IntegerAttr>(i).getInt();
-    int64_t paddingHigh = edgePaddingHigh.getValue<IntegerAttr>(i).getInt();
-    auto low = rewriter.create<ConstantOp>(
-        loc, indexType, rewriter.getIntegerAttr(indexType, paddingLow));
-
-    // d_i < (edge_padding_low[i] + operand_shape[i])
-    if (paddingLow != 0 && paddingHigh != 0) {
-      auto operandExtent = rewriter.create<DimOp>(loc, adaptor.operand(), i);
-      auto bound = rewriter.create<AddIOp>(loc, low, operandExtent);
-      auto checkUb =
-          rewriter.create<CmpIOp>(loc, CmpIPredicate::slt, dim, bound);
-      applyAndOp(checkUb);
-    }
-
-    if (paddingLow != 0) {
-      // d_i >= edge_padding_low[i]
-      auto checkLb = rewriter.create<CmpIOp>(loc, CmpIPredicate::sge, dim, low);
-      applyAndOp(checkLb);
-    }
+  const auto &interiorPadding = op.interior_padding();
+  SmallVector<Value, 3> offsets, sizes, strides;
+  for (auto it : llvm::enumerate(llvm::zip(edgePaddingLow, interiorPadding))) {
+    Value startIndex = rewriter.create<ConstantIndexOp>(
+        loc, std::get<0>(it.value()).getZExtValue());
+    offsets.push_back(startIndex);
+    Value size = rewriter.create<DimOp>(loc, resultBuffers[0], it.index());
+    sizes.push_back(size);
+    Value stride = rewriter.create<ConstantIndexOp>(
+        loc, std::get<1>(it.value()).getZExtValue() + 1);
+    strides.push_back(stride);
   }
-  Value inputVal = block->getArgument(rank);
-  if (!paddingConstVal) paddingVal = block->getArgument(rank + 1);
-  Value result =
-      cond ? rewriter.create<SelectOp>(loc, cond, inputVal, paddingVal)
-           : inputVal;
-  rewriter.create<linalg::YieldOp>(loc, result);
+
+  rewriter.create<linalg::FillOp>(loc, resultBuffers[0], paddingVal);
+  auto subViewOp = rewriter.create<SubViewOp>(loc, resultBuffers[0], offsets,
+                                              sizes, strides);
+  if (auto cstOp = dyn_cast<ConstantOp>(inputBuffers[0].getDefiningOp())) {
+    auto inputConstAttr =
+        cstOp.valueAttr().cast<DenseElementsAttr>().getSplatValue();
+    Value cstVal = rewriter.create<ConstantOp>(loc, inputConstAttr);
+    rewriter.create<linalg::FillOp>(loc, subViewOp, cstVal);
+  } else {
+    rewriter.create<linalg::CopyOp>(loc, inputBuffers[0], subViewOp);
+  }
+
   return success();
 }
 
@@ -820,8 +916,9 @@ LogicalResult SliceOpConversion::apply(
     ArrayRef<Value> resultBuffers, ConversionPatternRewriter &rewriter) const {
   auto loc = op.getLoc();
   auto argType = inputBuffers[0].getType().template dyn_cast<ShapedType>();
-  if (!argType || !argType.hasRank())
+  if (!argType || !argType.hasRank()) {
     return op.emitError("expected known-rank args");
+  }
 
   SmallVector<Value, 3> offsets, sizes, strides;
   for (int i = 0, e = argType.getRank(); i < e; ++i) {
@@ -873,17 +970,21 @@ LogicalResult TorchIndexSelectOpConversion::apply(
   int batch = op.batch_dims().getSExtValue();
   auto indexShapeType = adaptor.index().getType().dyn_cast<ShapedType>();
   int nIndices = indexShapeType.getRank();
-  if (batch < 0)
-    return op.emitError("expected batch_dims is greater than or equal to zero");
+  auto inputShapeType = adaptor.input().getType().dyn_cast<ShapedType>();
+  if (axis < 0) axis += inputShapeType.getRank();
+  if (batch < 0) batch += nIndices;
 
   Location loc = op.getLoc();
   Value output = op.getResult();
   int rank = output.getType().cast<ShapedType>().getRank();
   SmallVector<Attribute, 2> indexingMaps;
   SmallVector<AffineExpr, 4> exprs;
-  for (int i = 0; i < batch; ++i) exprs.push_back(rewriter.getAffineDimExpr(i));
-  for (int i = 0, e = nIndices - batch; i < e; ++i)
+  for (int i = 0; i < batch; ++i) {
+    exprs.push_back(rewriter.getAffineDimExpr(i));
+  }
+  for (int i = 0, e = nIndices - batch; i < e; ++i) {
     exprs.push_back(rewriter.getAffineDimExpr(axis + i));
+  }
   indexingMaps.emplace_back(AffineMapAttr::get(
       AffineMap::get(rank, /*symbolCount=*/0, exprs, rewriter.getContext())));
   indexingMaps.emplace_back(
@@ -897,7 +998,7 @@ LogicalResult TorchIndexSelectOpConversion::apply(
       rewriter.getI64IntegerAttr(1),  // args_out
       rewriter.getArrayAttr(indexingMaps),
       getParallelAndReductionIterAttrs(rewriter, rank, /*nReduction=*/0),
-      /*doc=*/nullptr, /*library_call=*/nullptr);
+      /*doc=*/nullptr, /*library_call=*/nullptr, /*symbol_source=*/nullptr);
 
   // Add a block to the region.
   auto *region = &linalgOp.region();
@@ -913,10 +1014,13 @@ LogicalResult TorchIndexSelectOpConversion::apply(
   SmallVector<Value, 4> indices;
   Value castedValue = rewriter.create<IndexCastOp>(
       loc, block->getArgument(rank), rewriter.getIndexType());
-  for (int i = 0; i < axis; ++i) indices.push_back(block->getArgument(i));
-  indices.push_back(castedValue);
-  for (int i = axis + nIndices - batch; i < rank; ++i)
+  for (int i = 0; i < axis; ++i) {
     indices.push_back(block->getArgument(i));
+  }
+  indices.push_back(castedValue);
+  for (int i = axis + nIndices - batch; i < rank; ++i) {
+    indices.push_back(block->getArgument(i));
+  }
 
   Value res = rewriter.create<LoadOp>(loc, adaptor.input(), indices);
   rewriter.create<linalg::YieldOp>(loc, res);
@@ -972,8 +1076,9 @@ LogicalResult ReduceWindowOpConversion::apply(
 
   // Create a fake window dimension.
   SmallVector<int64_t, 4> shapes;
-  for (auto dim : op.window_dimensions().getValues<int64_t>())
+  for (auto dim : op.window_dimensions().getValues<int64_t>()) {
     shapes.push_back(dim);
+  }
   Type type = rewriter.getIntegerType(32);
   auto memrefType = MemRefType::get(shapes, type);
   auto fakeWindowDims = rewriter.create<AllocOp>(loc, memrefType);
@@ -1039,8 +1144,9 @@ static AffineMap getTransposeMapForReduction(MLIRContext *context, int rank,
   for (auto dim : reductionDims) s.insert(dim);
 
   SmallVector<unsigned, 4> permutation;
-  for (int i = 0; i < rank; ++i)
+  for (int i = 0; i < rank; ++i) {
     if (!s.count(i)) permutation.push_back(i);
+  }
   for (auto dim : reductionDims) permutation.push_back(dim);
 
   auto map = AffineMap::getPermutationMap(permutation, context);
@@ -1152,8 +1258,9 @@ LogicalResult ReduceOpConversion::apply(
   auto loc = reduceOp.getLoc();
   DenseIntElementsAttr dimensionsAttr = reduceOp.dimensions();
   SmallVector<int, 4> reductionDims;
-  for (const auto &dim : dimensionsAttr.getIntValues())
+  for (const auto &dim : dimensionsAttr.getIntValues()) {
     reductionDims.push_back(dim.getSExtValue());
+  }
 
   // Check if initVal is constant. If so, inline the value into the region.
   Attribute initConstVal = getInitValueAsConst(initVal);
@@ -1170,16 +1277,18 @@ LogicalResult ReduceOpConversion::apply(
   SmallVector<Attribute, 3> indexingMaps;
   indexingMaps.emplace_back(AffineMapAttr::get(getTransposeMapForReduction(
       rewriter.getContext(), nInputRank, reductionDims)));
-  if (!initConstVal)
+  if (!initConstVal) {
     indexingMaps.emplace_back(AffineMapAttr::get(
         AffineMap::get(nInputRank, /*symbolCount=*/0, rewriter.getContext())));
+  }
   // The indexing map of `dst` should drop the reduction loops. Since the
   // reduction loops now are all in the innermost, drops `reductionDims.size()`
   // dimensions. We don't need an inverse permutation here because they are the
   // same.
   SmallVector<AffineExpr, 4> exprs;
-  for (int i = 0, e = nInputRank - reductionDims.size(); i < e; ++i)
+  for (int i = 0, e = nInputRank - reductionDims.size(); i < e; ++i) {
     exprs.push_back(rewriter.getAffineDimExpr(i));
+  }
   indexingMaps.emplace_back(AffineMapAttr::get(
       exprs.empty()
           ? AffineMap::get(nInputRank, /*symbolCount=*/0, rewriter.getContext())
@@ -1188,7 +1297,9 @@ LogicalResult ReduceOpConversion::apply(
 
   SmallVector<Type, 2> resultTypes = {};
   SmallVector<Value, 2> linalgOpArgs = {inputBuffers[0]};
-  if (!initConstVal) linalgOpArgs.push_back(inputBuffers[1]);
+  if (!initConstVal) {
+    linalgOpArgs.push_back(inputBuffers[1]);
+  }
   linalgOpArgs.push_back(resultBuffers[0]);
   if (failed(zeroFillBuffer(loc, resultBuffers[0], rewriter))) {
     rewriter.notifyMatchFailure(reduceOp, "failed to zero fill result buffer");
@@ -1201,7 +1312,7 @@ LogicalResult ReduceOpConversion::apply(
       rewriter.getArrayAttr(indexingMaps),
       getParallelAndReductionIterAttrs(rewriter, nInputRank,
                                        reductionDims.size()),
-      /*doc=*/nullptr, /*library_call=*/nullptr);
+      /*doc=*/nullptr, /*library_call=*/nullptr, /*symbol_source=*/nullptr);
 
   linalgOp.region().takeBody(reduceOp.body());
   {
@@ -1277,7 +1388,8 @@ struct LinalgOpOnTensorConversion
         op.getLoc(), ArrayRef<Type>(), opArgs, op.args_in(), op.args_out(),
         op.indexing_maps(), op.iterator_types(),
         /*doc=*/nullptr,
-        /*library_call=*/nullptr);
+        /*library_call=*/nullptr,
+        /*symbol_source=*/nullptr);
     // Move the region from the replaced op into the new op.
     unsigned numTensorOperands = op.getNumOperands();
     // indexed_generic op has arguments for each index. In the case of generic
@@ -1290,8 +1402,9 @@ struct LinalgOpOnTensorConversion
     // type.
     TypeConverter::SignatureConversion signatureConverter(numIndices +
                                                           numTensorOperands);
-    for (int i = 0; i < numIndices; ++i)
+    for (int i = 0; i < numIndices; ++i) {
       signatureConverter.addInputs(i, rewriter.getIndexType());
+    }
     for (auto arg : llvm::enumerate(opArgs)) {
       if (arg.index() < numTensorOperands) {
         signatureConverter.addInputs(
@@ -1322,14 +1435,30 @@ struct TensorReshapeOpConversion
       linalg::TensorReshapeOp reshapeOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
     linalg::TensorReshapeOp::Adaptor adaptor(operands);
-    if (Value buffer =
-            resolveResult(reshapeOp.src(), adaptor.src(), reshapeOp.result(),
-                          resultTensorToBufferMap))
-      rewriter.replaceOp(reshapeOp, buffer);
-    else
+    // If result has an associated buffer.
+    Value bufferForResult = resultTensorToBufferMap.lookup(reshapeOp.result());
+    if (!bufferForResult) {
+      // This is not a reshape before store_tensor. Replace this op with a
+      // reshape on buffers.
       rewriter.replaceOpWithNewOp<linalg::ReshapeOp>(
           reshapeOp, getMemrefTypeForTensor(reshapeOp.result()), adaptor.src(),
           reshapeOp.reassociation());
+      return success();
+    }
+
+    // Look at all uses of bufferForResult in reshape ops. If once of those is
+    // the input operand, there is nothing to do.
+    if (!llvm::any_of(bufferForResult.getUses(), [&](auto &use) {
+          auto bufferReshapeOp = dyn_cast<linalg::ReshapeOp>(use.getOwner());
+          return bufferReshapeOp && bufferReshapeOp.result() == adaptor.src();
+        })) {
+      Value copySrc = rewriter.create<linalg::ReshapeOp>(
+          reshapeOp.getLoc(), bufferForResult.getType(), adaptor.src(),
+          reshapeOp.reassociation());
+      rewriter.create<linalg::CopyOp>(reshapeOp.getLoc(), copySrc,
+                                      bufferForResult);
+    }
+    rewriter.replaceOp(reshapeOp, bufferForResult);
     return success();
   }
 
@@ -1357,13 +1486,15 @@ struct ShapeOpPattern final : public OpConversionPattern<Shape::TieShapeOp> {
       Shape::TieShapeOp shapeOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
     Shape::TieShapeOp::Adaptor adaptor(operands);
-    if (Value buffer = resolveResult(shapeOp.operand(), adaptor.operand(),
-                                     shapeOp.result(), resultTensorToBufferMap))
+    if (Value buffer =
+            resolveResult(shapeOp.operand(), adaptor.operand(),
+                          shapeOp.result(), resultTensorToBufferMap)) {
       rewriter.replaceOp(shapeOp, buffer);
-    else
+    } else {
       rewriter.replaceOpWithNewOp<Shape::TieShapeOp>(
           shapeOp, getMemrefTypeForTensor(shapeOp.result()), adaptor.operand(),
           adaptor.shape());
+    }
     return success();
   }
 
@@ -1383,8 +1514,9 @@ struct HALInterfaceLoadTensorOpEraser final
   LogicalResult matchAndRewrite(IREE::HAL::InterfaceLoadTensorOp loadOp,
                                 ArrayRef<Value> operands,
                                 ConversionPatternRewriter &rewriter) const {
-    if (!matchPattern(loadOp.offset(), m_Zero()))
+    if (!matchPattern(loadOp.offset(), m_Zero())) {
       return loadOp.emitError("unhandled non-zero offset");
+    }
 
     // Get the corresponding memref type from the tensor type.
     auto tensorType = loadOp.result().getType().cast<RankedTensorType>();
@@ -1420,22 +1552,29 @@ struct HALInterfaceLoadTensorOpEraser final
 /// Erases the hal.interface.store.tensor and replace all uses with the buffer.
 struct HALInterfaceStoreTensorOpEraser final
     : public OpConversionPattern<IREE::HAL::InterfaceStoreTensorOp> {
-  HALInterfaceStoreTensorOpEraser(
-      MLIRContext *context, TensorToBufferMap const &resultTensorToBufferMap,
-      PatternBenefit benefit = 1)
+  HALInterfaceStoreTensorOpEraser(MLIRContext *context,
+                                  OutputBufferMap const &outputBufferMap,
+                                  PatternBenefit benefit = 1)
       : OpConversionPattern<IREE::HAL::InterfaceStoreTensorOp>(context,
                                                                benefit),
-        resultTensorToBufferMap(resultTensorToBufferMap) {}
+        outputBufferMap(outputBufferMap) {}
 
   LogicalResult matchAndRewrite(
       IREE::HAL::InterfaceStoreTensorOp storeOp, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
     IREE::HAL::InterfaceStoreTensorOp::Adaptor adaptor(operands);
     Value operand = adaptor.operand();
+    if (!operand.getType().isa<MemRefType>()) {
+      return storeOp.emitRemark()
+             << "expected replacement operand to be of memref type, got "
+             << operand.getType();
+    }
+    Value outputBuffer = outputBufferMap.lookup(storeOp);
+    if (!outputBuffer) return storeOp.emitError() << "undefined output buffer";
+
     // If we are just storing the buffer back to itself again, we can trivially
     // remove this op. Otherwise, copy the content from the source buffer to the
     // destination buffer.
-    Value outputBuffer = resultTensorToBufferMap.lookup(storeOp.operand());
     if (outputBuffer == operand) {
       rewriter.eraseOp(storeOp);
       return success();
@@ -1449,7 +1588,7 @@ struct HALInterfaceStoreTensorOpEraser final
   }
 
  private:
-  TensorToBufferMap const &resultTensorToBufferMap;
+  OutputBufferMap const &outputBufferMap;
 };
 }  // namespace
 
@@ -1487,10 +1626,11 @@ struct HALInterfaceStoreTensorOpEraser final
 /// tensor_reshape operation has a single use (the tensor_reshape) there
 /// distinction can be ignored.
 static LogicalResult createAndPropagateBufferUsedForResultTensor(
-    IREE::HAL::InterfaceStoreTensorOp op,
+    IREE::HAL::InterfaceStoreTensorOp op, OutputBufferMap &outputBufferMap,
     TensorToBufferMap &resultTensorToBufferMap, OpBuilder &builder) {
-  if (!matchPattern(op.offset(), m_Zero()))
+  if (!matchPattern(op.offset(), m_Zero())) {
     return op.emitError("unhandled non-zero offset");
+  }
 
   // Get the corresponding memref type from the tensor type.
   Value tensor = op.operand();
@@ -1505,8 +1645,9 @@ static LogicalResult createAndPropagateBufferUsedForResultTensor(
                                                   "interface buffer");
   phOp.setAttr("binding", op.binding());
   Value buffer = phOp;
-  resultTensorToBufferMap[tensor] = buffer;
+  outputBufferMap[op] = buffer;
 
+  resultTensorToBufferMap.insert(std::make_pair(tensor, buffer));
   while (true) {
     if (auto tieShapeOp = tensor.getDefiningOp<Shape::TieShapeOp>()) {
       if (!tieShapeOp.result().hasOneUse()) break;
@@ -1515,7 +1656,7 @@ static LogicalResult createAndPropagateBufferUsedForResultTensor(
           op.getLoc(), buffer.getType(), buffer, tieShapeOp.shape());
       tensor = tieShapeOp.operand();
       buffer = newTieShapeOp.result();
-      resultTensorToBufferMap[tensor] = buffer;
+      resultTensorToBufferMap.insert(std::make_pair(tensor, buffer));
       continue;
     }
     if (auto tensorReshapeOp =
@@ -1526,7 +1667,7 @@ static LogicalResult createAndPropagateBufferUsedForResultTensor(
           buffer, tensorReshapeOp.reassociation());
       tensor = tensorReshapeOp.src();
       buffer = newReshapeOp.result();
-      resultTensorToBufferMap[tensor] = buffer;
+      resultTensorToBufferMap.insert(std::make_pair(tensor, buffer));
       continue;
     }
     break;
@@ -1537,12 +1678,13 @@ static LogicalResult createAndPropagateBufferUsedForResultTensor(
 /// Processes the hal.interface.store.tensor instructions to get buffer views
 /// for the inputs/outputs to the dispatch function.
 static LogicalResult createAndPropagateBufferUsedForResultTensors(
-    FuncOp funcOp, TensorToBufferMap &resultTensorToBufferMap) {
+    FuncOp funcOp, OutputBufferMap &outputBufferMap,
+    TensorToBufferMap &resultTensorToBufferMap) {
   OpBuilder builder(funcOp.getBody());
   auto walkResult = funcOp.walk(
       [&](IREE::HAL::InterfaceStoreTensorOp storeTensorOp) -> WalkResult {
         return createAndPropagateBufferUsedForResultTensor(
-            storeTensorOp, resultTensorToBufferMap, builder);
+            storeTensorOp, outputBufferMap, resultTensorToBufferMap, builder);
       });
   return failure(walkResult.wasInterrupted());
 }
@@ -1562,12 +1704,11 @@ void populateHLOToLinalgOnBuffersConversionPatterns(
     MLIRContext *context, OwningRewritePatternList &patterns,
     TensorToBufferMap const &resultTensorToBufferMap) {
   patterns.insert<
-      //                    ConvOpConversion,
-      //        DotOpConversion<DotOperationType::MatrixMatrix,
-      //        linalg::MatmulOp>,
-      RiseConvOpConversion,
+      ConvOpConversion, ConcatenateOpConversion,
+//      DotOpConversion<DotOperationType::MatrixMatrix, linalg::MatmulOp>,
+//      RiseConvOpConversion,
       RiseDotOpConversion<DotOperationType::MatrixMatrix, linalg::MatmulOp>,
-      LinalgOpOnTensorConversion<linalg::GenericOp>,
+      DotGeneralOpConversion, LinalgOpOnTensorConversion<linalg::GenericOp>,
       LinalgOpOnTensorConversion<linalg::IndexedGenericOp>, PadOpConversion,
       ReduceOpConversion, ReduceWindowOpConversion, SliceOpConversion,
       TensorReshapeOpConversion, TorchIndexSelectOpConversion>(
@@ -1584,17 +1725,19 @@ void ConvertHLOToLinalgOnBuffersPass::runOnFunction() {
   FuncOp funcOp = getFunction();
 
   // First create buffers for all StoreTensorOps.
+  OutputBufferMap outputBufferMap;
   TensorToBufferMap resultTensorToBufferMap;
   if (failed(createAndPropagateBufferUsedForResultTensors(
-          funcOp, resultTensorToBufferMap)))
+          funcOp, outputBufferMap, resultTensorToBufferMap))) {
     return signalPassFailure();
+  }
 
   OwningRewritePatternList patterns;
   populateHLOToLinalgOnBuffersConversionPatterns(context, patterns,
                                                  resultTensorToBufferMap);
-  patterns.insert<HALInterfaceLoadTensorOpEraser,
-                  HALInterfaceStoreTensorOpEraser, ShapeOpPattern>(
+  patterns.insert<HALInterfaceLoadTensorOpEraser, ShapeOpPattern>(
       context, resultTensorToBufferMap);
+  patterns.insert<HALInterfaceStoreTensorOpEraser>(context, outputBufferMap);
 
   ConversionTarget target(*context);
   // Make sure all XLA HLO ops are converted to Linalg ops after this pass.
@@ -1612,8 +1755,9 @@ void ConvertHLOToLinalgOnBuffersPass::runOnFunction() {
   target.addDynamicallyLegalDialect<linalg::LinalgDialect>(
       Optional<ConversionTarget::DynamicLegalityCallbackFn>([](Operation *op) {
         // The generated structured Linalg ops should have buffer semantics.
-        if (auto linalgOp = dyn_cast<linalg::LinalgOp>(op))
+        if (auto linalgOp = dyn_cast<linalg::LinalgOp>(op)) {
           return linalgOp.hasBufferSemantics();
+        }
         // The other Linalg ops (like linalg.yield) are okay.
         return true;
       }));

@@ -13,11 +13,20 @@
 # limitations under the License.
 
 load("//iree/tools:compilation.bzl", "iree_bytecode_module")
+load("//iree:build_defs.oss.bzl", "iree_cmake_extra_content")
 
 package(
     default_visibility = ["//visibility:public"],
     features = ["layering_check"],
     licenses = ["notice"],  # Apache 2.0
+)
+
+iree_cmake_extra_content(
+    content = """
+if(NOT ${IREE_TARGET_BACKEND_VMLA} OR NOT ${IREE_HAL_DRIVER_VMLA})
+  return()
+endif()
+""",
 )
 
 iree_bytecode_module(
@@ -42,9 +51,10 @@ cc_test(
         "//iree/testing:gtest_main",
         "//iree/vm",
         "//iree/vm:bytecode_module",
-        "//iree/vm:ref",
+        "//iree/vm:ref_cc",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -54,10 +64,6 @@ cc_library(
     hdrs = ["native_module.h"],
     deps = [
         "//iree/base:api",
-        "//iree/base:api_util",
-        "//iree/base:buffer_string_util",
-        "//iree/base:shape",
-        "//iree/base:shaped_buffer_string_util",
         "//iree/hal:api",
         "//iree/modules/hal",
         "//iree/vm",
