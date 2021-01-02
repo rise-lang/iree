@@ -34,8 +34,8 @@ void addLinalgToLLVMPasses(OpPassManager &passManager) {
   passManager.addPass(createCanonicalizerPass());
   passManager.addPass(createAffineVectorizePass());
   passManager.addPass(createCanonicalizerPass());
-  passManager.addPass(createAffineScalarReplacementPass());
-  passManager.addPass(createCanonicalizerPass());
+//  passManager.addPass(createAffineScalarReplacementPass());
+//  passManager.addPass(createCanonicalizerPass());
 
   // Linalg -> Vectors Ops.
   passManager.addPass(createMatMulTileAndVectorizePass());

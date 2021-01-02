@@ -1705,9 +1705,9 @@ void populateHLOToLinalgOnBuffersConversionPatterns(
     TensorToBufferMap const &resultTensorToBufferMap) {
   patterns.insert<
       ConvOpConversion, ConcatenateOpConversion,
-//      DotOpConversion<DotOperationType::MatrixMatrix, linalg::MatmulOp>,
+      DotOpConversion<DotOperationType::MatrixMatrix, linalg::MatmulOp>,
 //      RiseConvOpConversion,
-      RiseDotOpConversion<DotOperationType::MatrixMatrix, linalg::MatmulOp>,
+//      RiseDotOpConversion<DotOperationType::MatrixMatrix, linalg::MatmulOp>,
       DotGeneralOpConversion, LinalgOpOnTensorConversion<linalg::GenericOp>,
       LinalgOpOnTensorConversion<linalg::IndexedGenericOp>, PadOpConversion,
       ReduceOpConversion, ReduceWindowOpConversion, SliceOpConversion,

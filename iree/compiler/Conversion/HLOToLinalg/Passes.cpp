@@ -29,7 +29,7 @@ void addHLOToLinalgOnBuffersPasses(OpPassManager &pm) {
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createLinalgFusionOfTensorOpsPass());
   pm.addPass(createHLOToLinalgOnBuffersPass());
-  pm.addPass(createConvertRiseToImperativePass());
+//  pm.addPass(createConvertRiseToImperativePass());
 }
 
 static PassPipelineRegistration<> hloToLinalgOnBuffersPipeline(
